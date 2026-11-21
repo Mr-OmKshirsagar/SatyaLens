@@ -11,7 +11,7 @@
 
 ## Phase 1: Backend (`/backend`)
 - [x] **Step 1:** Create `backend/requirements.txt`, `backend/.env.example`, `backend/schemas.py`, and `backend/main.py` (`GET /health` + CORS). Verify `GET /health`.
-- [ ] **Step 2:** Create `backend/forensics.py` (`generate_ela_heatmap`, `extract_exif_metadata`, `extract_url_text`). Verify image + URL helpers and re-check `GET /health`.
+- [x] **Step 2:** Create `backend/forensics.py` (`generate_ela_heatmap`, `extract_exif_metadata`, `extract_url_text`). Verify image + URL helpers and re-check `GET /health`.
 - [ ] **Step 3:** Create `backend/analyzer.py` (primary `google-genai` with Google Search grounding + `ddgs` and `groq` fallback). Verify structured JSON output and re-check Steps 1–2.
 - [ ] **Step 4:** Wire `POST /api/analyze` in `backend/main.py` for `text`, `url`, and `image` (`400` on empty input). Verify all modes + `GET /health` and earlier steps.
 
