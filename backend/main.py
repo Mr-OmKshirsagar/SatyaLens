@@ -1,11 +1,39 @@
 import os
+from typing import Optional
+
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+
+# Resilient dual-imports for root and backend/ execution
 try:
-    from backend.schemas import HealthResponse
+    from backend.schemas import (
+        ExifSummary,
+        ForensicAuditResponse,
+        HealthResponse,
+        VisualForensics,
+    )
+    from backend.forensics import (
+        compute_tampering_likelihood,
+        extract_exif_metadata,
+        extract_url_text,
+        generate_ela_heatmap,
+    )
+    from backend.analyzer import analyze_content
 except ImportError:
-    from schemas import HealthResponse
+    from schemas import (  # type: ignore
+        ExifSummary,
+        ForensicAuditResponse,
+        HealthResponse,
+        VisualForensics,
+    )
+    from forensics import (  # type: ignore
+        compute_tampering_likelihood,
+        extract_exif_metadata,
+        extract_url_text,
+        generate_ela_heatmap,
+    )
+    from analyzer import analyze_content  # type: ignore
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +58,105 @@ app.add_middleware(
 def health_check() -> HealthResponse:
     """Forensic engine health status endpoint."""
     return HealthResponse(status="ok", service="satyalens-forensics")
+
+
+@app.post(
+    "/api/analyze",
+    response_model=ForensicAuditResponse,
+    tags=["Forensics"],
+    summary="Multi-modal forensic analysis endpoint (Text, URL, Image)",
+)
+def analyze_claim(
+    text: Optional[str] = Form(None),
+    url: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    audio: Optional[UploadFile] = File(None),  # Reserved for P1 stretch
+) -> ForensicAuditResponse:
+    """
+    Analyzes submitted claims, URLs, or images for disinformation, manipulation,
+    and media tampering.
+    """
+    # Normalize inputs whether called via FastAPI HTTP or direct Python invocation
+    clean_text = text.strip() if isinstance(text, str) and text.strip() else None
+    clean_url = url.strip() if isinstance(url, str) and url.strip() else None
+
+    # Process image if provided
+    image_bytes: Optional[bytes] = None
+    if image and hasattr(image, "filename") and image.filename:
+        try:
+            if hasattr(image, "file"):
+                image_bytes = image.file.read()
+            elif hasattr(image, "read"):
+                # Fallback for mock or custom file objects
+                res = image.read()
+                image_bytes = res if isinstance(res, bytes) else None
+            if not image_bytes:
+                image_bytes = None
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unable to read uploaded image: {e}",
+            )
+
+    # 400 Bad Request if no valid input is supplied
+    if not clean_text and not clean_url and not image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid input provided. Please provide text, a URL, or an image file.",
+        )
+
+    # Extract URL content if provided
+    extracted_url_text: Optional[str] = None
+    if clean_url:
+        try:
+            extracted_url_text = extract_url_text(clean_url)
+        except ValueError as e:
+            # If only a URL was submitted and scraping failed, return 400
+            if not clean_text and not image_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"URL extraction failed: {e}",
+                )
+
+    # Compute deterministic visual forensics if image was submitted
+    if image_bytes:
+        try:
+            ela_heatmap = generate_ela_heatmap(image_bytes)
+            exif_dict = extract_exif_metadata(image_bytes)
+            tampering_likelihood = compute_tampering_likelihood(image_bytes, exif_dict)
+
+            visual_forensics = VisualForensics(
+                has_image=True,
+                ela_heatmap_base64=ela_heatmap,
+                tampering_likelihood=tampering_likelihood,  # type: ignore
+                exif_summary=ExifSummary(
+                    software=exif_dict.get("software"),
+                    camera_model=exif_dict.get("camera_model"),
+                    anomalies=exif_dict.get("anomalies", []),
+                ),
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image forensics failed: {e}",
+            )
+    else:
+        visual_forensics = VisualForensics(
+            has_image=False,
+            ela_heatmap_base64=None,
+            tampering_likelihood="None",
+            exif_summary=ExifSummary(),
+        )
+
+    # Run analysis pipeline (Gemini Grounded -> Groq+DDGS -> Heuristics)
+    report = analyze_content(
+        text=clean_text,
+        url=clean_url,
+        extracted_url_text=extracted_url_text,
+        visual_forensics=visual_forensics,
+    )
+
+    return report
 
 
 if __name__ == "__main__":
