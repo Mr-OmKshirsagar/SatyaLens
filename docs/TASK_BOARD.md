@@ -18,7 +18,7 @@
 ---
 
 ## Phase 2: Frontend (`/frontend`)
-- [ ] **Step 5:** Scaffold React + Vite + Tailwind + `framer-motion` + `lucide-react` in `frontend/`, apply Stitch/Magic UI tokens from `docs/design.md`, and verify `npm run build`.
+- [x] **Step 5:** Scaffold React + Vite + Tailwind + `framer-motion` + `lucide-react` in `frontend/`, apply Stitch/Magic UI tokens from `docs/design.md`, and verify `npm run build`.
 - [ ] **Step 6:** Build Forensic Intake Console with Text/URL/Image tabs, 3 one-click live samples, and multi-stage loading wired to `VITE_API_URL/api/analyze`. Verify `npm run build`, live backend request, and Steps 1–4.
 - [ ] **Step 7:** Build 4-Layer Forensic Audit Report (Score, Original/ELA Heatmap + EXIF, Atomic Claims + clickable links, Linguistic Flags, and English/Hindi Copyable WhatsApp Card). Verify `npm run build`, Chrome DevTools MCP inspection, and all prior steps.
 
