@@ -120,7 +120,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
   }
 
   // Real backend submission against POST /api/analyze
-  const executeAnalysis = async (formDataOverride = null) => {
+  const executeAnalysis = async (formDataOverride = null, overridePreview = null) => {
     setError(null)
     setIsLoading(true)
     if (onAnalysisStart) onAnalysisStart()
@@ -163,7 +163,8 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
 
       const result = await response.json()
       setRecentResult(result)
-      if (onAnalysisComplete) onAnalysisComplete(result)
+      const previewToUse = overridePreview || imagePreview
+      if (onAnalysisComplete) onAnalysisComplete(result, previewToUse)
     } catch (err) {
       console.error('Forensic analysis error:', err)
       setError(err.message || 'An unexpected error occurred during forensic analysis.')
@@ -176,31 +177,34 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
   const handleTriggerSample = async (sampleType) => {
     setError(null)
     if (sampleType === 'viral_text') {
+      clearImage()
       setActiveTab('text')
       const text =
         '🚨 URGENT FORWARD: UNESCO has officially declared the Indian National Anthem as the best in the world! NASA satellite has also confirmed cosmic energy alignment. Forward to 10 groups immediately or bad luck will follow!'
       setTextInput(text)
       const fd = new FormData()
       fd.append('text', text)
-      await executeAnalysis(fd)
+      await executeAnalysis(fd, null)
     } else if (sampleType === 'fact_url') {
+      clearImage()
       setActiveTab('url')
       const url = 'https://en.wikipedia.org/wiki/Jana_Gana_Mana'
       setUrlInput(url)
       const fd = new FormData()
       fd.append('url', url)
-      await executeAnalysis(fd)
+      await executeAnalysis(fd, null)
     } else if (sampleType === 'meme_image') {
       setActiveTab('image')
       const file = await createSampleImageFile()
+      const previewUrl = URL.createObjectURL(file)
       setImageFile(file)
-      setImagePreview(URL.createObjectURL(file))
+      setImagePreview(previewUrl)
       const query = 'Breaking: Leaked photo claiming new government 5000 rupee note issued. Is this note genuine?'
       setImageQuery(query)
       const fd = new FormData()
       fd.append('image', file)
       fd.append('text', query)
-      await executeAnalysis(fd)
+      await executeAnalysis(fd, previewUrl)
     }
   }
 
@@ -587,59 +591,6 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
           </div>
         </div>
       </div>
-
-      {/* Step 6 Result Bridge Preview (Demonstrating live POST /api/analyze binding before Step 7) */}
-      <AnimatePresence>
-        {recentResult && !isLoading && (
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -12 }}
-            className="mt-6 p-5 rounded-2xl bg-surface border border-surface-border shadow-xl"
-          >
-            <div className="flex items-center justify-between mb-3 border-b border-surface-border pb-3">
-              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>LIVE AUDIT RESULT RECEIVED:</span>
-                <span className="text-white font-semibold">{recentResult.engine_used}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-slate-400">Verdict:</span>
-                <span
-                  className={`text-xs font-bold font-mono px-2.5 py-0.5 rounded-full ${
-                    recentResult.verdict === 'Verified'
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                      : recentResult.verdict === 'Misleading'
-                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                      : 'bg-red-500/20 text-red-400 border border-red-500/40'
-                  }`}
-                >
-                  {recentResult.verdict}
-                </span>
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-surface border border-surface-border text-slate-200">
-                  {recentResult.overall_score}/100
-                </span>
-              </div>
-            </div>
-
-            <p className="text-xs sm:text-sm text-slate-300 mb-3 leading-relaxed">
-              {recentResult.summary}
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] font-mono text-slate-400 pt-2 border-t border-surface-border/60">
-              <div>
-                Claims checked: <span className="text-white font-semibold">{recentResult.atomic_claims?.length || 0}</span>
-              </div>
-              <div>
-                Flags flagged: <span className="text-amber-400 font-semibold">{recentResult.linguistic_flags?.length || 0}</span>
-              </div>
-              <div>
-                Image ELA: <span className="text-white font-semibold">{recentResult.visual_forensics?.has_image ? 'Analyzed' : 'None'}</span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   )
 }

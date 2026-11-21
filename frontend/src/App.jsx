@@ -1,10 +1,27 @@
-import React, { useState } from 'react'
-import { ShieldCheck, Sparkles, Activity } from 'lucide-react'
-import { motion } from 'framer-motion'
+import React, { useState, useRef } from 'react'
+import { ShieldCheck, Sparkles } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import ForensicIntakeConsole from './components/ForensicIntakeConsole'
+import ForensicAuditReport from './components/ForensicAuditReport'
 
 export default function App() {
   const [currentResult, setCurrentResult] = useState(null)
+  const [originalImagePreview, setOriginalImagePreview] = useState(null)
+  const reportRef = useRef(null)
+
+  const handleAnalysisComplete = (result, imagePreview) => {
+    setCurrentResult(result)
+    setOriginalImagePreview(imagePreview || null)
+    setTimeout(() => {
+      reportRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }, 150)
+  }
+
+  const handleReset = () => {
+    setCurrentResult(null)
+    setOriginalImagePreview(null)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans selection:bg-accent/30 selection:text-white">
@@ -67,13 +84,26 @@ export default function App() {
         {/* Forensic Intake Console (Step 6) */}
         <ForensicIntakeConsole
           onAnalysisStart={() => setCurrentResult(null)}
-          onAnalysisComplete={(res) => setCurrentResult(res)}
-          onReset={() => setCurrentResult(null)}
+          onAnalysisComplete={handleAnalysisComplete}
+          onReset={handleReset}
         />
+
+        {/* 4-Layer Forensic Audit Report (Step 7) */}
+        <div ref={reportRef} className="w-full">
+          <AnimatePresence>
+            {currentResult && (
+              <ForensicAuditReport
+                audit={currentResult}
+                originalImagePreview={originalImagePreview}
+                onNewAnalysis={handleReset}
+              />
+            )}
+          </AnimatePresence>
+        </div>
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-surface-border py-4 px-4 text-center text-xs text-slate-500 font-mono">
+      <footer className="border-t border-surface-border py-4 px-4 text-center text-xs text-slate-500 font-mono mt-12">
         SatyaLens © 2026 • Real-Time Fact-Verification & Deepfake Audit Engine • Zero-Auth Hackathon Mode
       </footer>
     </div>
