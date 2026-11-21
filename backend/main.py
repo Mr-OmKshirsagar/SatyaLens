@@ -37,6 +37,7 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 app = FastAPI(
     title="SatyaLens Forensic Engine API",

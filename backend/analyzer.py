@@ -13,6 +13,9 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
+# Search grounding
+from ddgs import DDGS
+
 # Schemas
 try:
     from backend.schemas import (
@@ -37,16 +40,22 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 logger = logging.getLogger("satyalens.analyzer")
 
 # Supported models
+# Prioritizes gemini-3.8-flash and falls back to gemini-3.1-flash-lite before routing to Groq + DDGS
 PRIMARY_GEMINI_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-1.5-flash",
-    "gemini-2.0-flash",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
 ]
-FALLBACK_GROQ_MODEL = "llama-3.3-70b-versatile"
+FALLBACK_GROQ_MODELS = [
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
+]
 
 SYSTEM_INSTRUCTION = """You are SatyaLens, an elite, real-time digital forensics and fact-verification engine built for civic protection against misinformation, disinformation, and manipulated media.
 
@@ -188,110 +197,105 @@ def clean_and_parse_json(raw_text: str) -> Dict[str, Any]:
     return json.loads(clean)
 
 
-def _build_search_query(user_text: str) -> str:
-    """Builds a concise search query for grounding engines."""
-    # Strip URLs and special characters, keep first 120 chars
-    cleaned = re.sub(r"https?://\S+", "", user_text)
+def _build_search_query_candidates(user_text: str) -> List[str]:
+    """
+    Builds concise, search-effective query variants for DDGS grounding.
+    Strips noise, prefixes, and stop words so search engines don't fail on overly specific conjunctions.
+    """
+    cleaned = re.sub(r"(?i)\b(Text Input|Source URL|Extracted Article Text|Image forensic analysis[^\n:]*):?", "", user_text)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"[^\w\s]", " ", cleaned).strip()
     words = cleaned.split()
-    return " ".join(words[:15]) if words else "news fact check"
+    if not words:
+        return ["news fact check"]
+
+    stop_words = {
+        "a", "an", "the", "is", "are", "was", "were", "has", "have", "had",
+        "in", "on", "at", "to", "for", "of", "with", "by", "from", "and",
+        "or", "as", "it", "its", "this", "that", "these", "those", "times",
+        "been", "being", "will", "would", "shall", "should", "can", "could",
+    }
+    keywords = [w for w in words if w.lower() not in stop_words]
+    q_keywords = " ".join(keywords[:8])
+    q_words = " ".join(words[:8])
+    q_extended = " ".join(words[:12])
+
+    candidates = []
+    for q in [q_keywords, q_words, q_extended]:
+        if q and q not in candidates:
+            candidates.append(q)
+
+    # If the claim contains specific subjects like sports, politics, or awards, add a broader topic candidate
+    lowered = cleaned.lower()
+    if "t20 world cup" in lowered or "world cup" in lowered:
+        q_topic = "ICC Men T20 World Cup winners list"
+        if q_topic not in candidates:
+            candidates.append(q_topic)
+    elif "unesco" in lowered and "anthem" in lowered:
+        q_topic = "UNESCO Indian national anthem fact check"
+        if q_topic not in candidates:
+            candidates.append(q_topic)
+
+    return candidates
 
 
-def _analyze_with_gemini(
-    sanitized_input: str,
-    visual_forensics: VisualForensics,
-    api_key: str,
-    audio_bytes: Optional[bytes] = None,
-    audio_mime_type: Optional[str] = None,
-) -> ForensicAuditResponse:
+def _build_search_query(user_text: str) -> str:
+    """Builds a concise search query for grounding engines."""
+    candidates = _build_search_query_candidates(user_text)
+    return candidates[0] if candidates else "news fact check"
+
+
+def _fetch_ddgs_snippets(raw_text: str, max_results: int = 5) -> tuple[List[str], List[Dict[str, str]]]:
     """
-    Primary analysis pipeline: Google GenAI SDK with live Google Search grounding.
+    Fetches fresh search snippets and sources using DDGS.
+    Tries smart query candidates with a strict timeout and aggregates results up to max_results.
     """
-    from google import genai
-    from google.genai import types
+    candidates = _build_search_query_candidates(raw_text)
+    collected_sources: List[Dict[str, str]] = []
+    search_context: List[str] = []
 
-    client = genai.Client(api_key=api_key)
-
-    visual_context = (
-        f"\nVisual Forensics Metadata:\n"
-        f"- Image analyzed: {visual_forensics.has_image}\n"
-        f"- Tampering Likelihood: {visual_forensics.tampering_likelihood}\n"
-        f"- Software: {visual_forensics.exif_summary.software}\n"
-        f"- Camera: {visual_forensics.exif_summary.camera_model}\n"
-        f"- Metadata Anomalies: {', '.join(visual_forensics.exif_summary.anomalies) or 'None'}\n"
-    )
-
-    prompt = (
-        f"{SYSTEM_INSTRUCTION}\n\n"
-        f"Forensic Evidence to Audit:\n{sanitized_input}\n{visual_context}"
-    )
-
-    # Enable Google Search grounding tool
-    config = types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())],
-        temperature=0.2,
-    )
-
-    contents_payload: Any = prompt
-    if audio_bytes:
+    for query in candidates[:2]:
         try:
-            audio_part = types.Part.from_bytes(
-                data=audio_bytes,
-                mime_type=audio_mime_type or "audio/mp3",
-            )
-            contents_payload = [audio_part, prompt]
-        except Exception as e:
-            logger.warning(f"Could not attach audio part to Gemini request: {e}")
-            contents_payload = prompt
-
-    response = None
-    last_err = None
-    for model_name in PRIMARY_GEMINI_MODELS:
-        try:
-            logger.info(f"Attempting primary analysis with Gemini model: {model_name}")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents_payload,
-                config=config,
-            )
-            if response and response.text:
+            logger.info(f"Executing DDGS grounding search query: '{query}'")
+            with DDGS(timeout=8) as ddgs:
+                results = list(ddgs.text(query, max_results=4))
+                if results:
+                    for r in results:
+                        title = r.get("title", "")
+                        url = r.get("href", "")
+                        snippet = r.get("body", "")
+                        if url and url not in [s["url"] for s in collected_sources]:
+                            collected_sources.append({"title": title or "Web Source", "url": url})
+                            search_context.append(f"- [{title}]({url}): {snippet}")
+                        if len(collected_sources) >= max_results:
+                            break
+            if len(collected_sources) >= 3:
                 break
         except Exception as e:
-            logger.warning(f"Gemini model {model_name} failed: {e}")
-            last_err = e
+            logger.debug(f"DDGS candidate '{query}' returned no results or failed: {e}")
 
-    if not response or not response.text:
-        raise RuntimeError(f"All Gemini primary models failed. Last error: {last_err}")
+    return search_context, collected_sources
 
-    raw_json = clean_and_parse_json(response.text)
 
-    # Augment sources from Google Search grounding metadata if present
-    grounding_sources: List[Dict[str, str]] = []
-    try:
-        candidates = getattr(response, "candidates", [])
-        if candidates and hasattr(candidates[0], "grounding_metadata"):
-            gmeta = candidates[0].grounding_metadata
-            chunks = getattr(gmeta, "grounding_chunks", []) or []
-            for chunk in chunks:
-                web = getattr(chunk, "web", None)
-                if web and getattr(web, "uri", None):
-                    grounding_sources.append({
-                        "title": getattr(web, "title", "Google Search Source") or "Verified Source",
-                        "url": getattr(web, "uri", ""),
-                    })
-    except Exception as e:
-        logger.debug(f"Could not parse grounding chunks: {e}")
-
-    # Build validated AtomicClaims
+def _build_forensic_response_from_json(
+    raw_json: Dict[str, Any],
+    visual_forensics: VisualForensics,
+    default_sources: List[Dict[str, str]],
+    engine_used: str,
+    has_audio: bool = False,
+) -> ForensicAuditResponse:
+    """
+    Standardizes and validates a parsed JSON dictionary into the unified
+    ForensicAuditResponse Pydantic contract across all AI provider engines.
+    """
     claims = []
     for c in raw_json.get("atomic_claims", []):
         sources = [
             SourceCitation(title=s.get("title", "Source"), url=s.get("url", ""))
             for s in c.get("sources", [])
         ]
-        # Attach grounded search sources if claim had none
-        if not sources and grounding_sources:
-            sources = [SourceCitation(**s) for s in grounding_sources[:2]]
+        if not sources and default_sources:
+            sources = [SourceCitation(**s) for s in default_sources[:2]]
 
         status = c.get("status", "Unverified")
         if status not in ("Verified", "Misleading", "Fabricated", "Unverified"):
@@ -306,7 +310,6 @@ def _analyze_with_gemini(
             )
         )
 
-    # Linguistic flags
     flags = [
         LinguisticFlag(
             trigger=f.get("trigger", "Notice"),
@@ -322,7 +325,6 @@ def _analyze_with_gemini(
 
     score = max(0, min(100, int(raw_json.get("overall_score", 50))))
 
-    has_audio = bool(audio_bytes)
     audio_synth = raw_json.get("audio_synthetic_likelihood", "Low" if has_audio else "None")
     if audio_synth not in ("None", "Low", "Medium", "High"):
         audio_synth = "Low" if has_audio else "None"
@@ -337,14 +339,179 @@ def _analyze_with_gemini(
         overall_score=score,
         verdict=verdict,
         provenance_category=raw_json.get("provenance_category", "Audio Voice Note" if has_audio else "Claim Check"),
-        summary=raw_json.get("summary", "Forensic analysis completed via Gemini."),
+        summary=raw_json.get("summary", f"Forensic analysis completed via {engine_used}."),
         atomic_claims=claims,
         visual_forensics=visual_forensics,
         audio_forensics=audio_forensics,
         linguistic_flags=flags,
         whatsapp_card_en=raw_json.get("whatsapp_card_en", ""),
         whatsapp_card_hi=raw_json.get("whatsapp_card_hi", ""),
-        engine_used="Gemini Flash (Google Search Grounded)",
+        engine_used=engine_used,
+    )
+
+
+def _analyze_with_gemini(
+    sanitized_input: str,
+    visual_forensics: VisualForensics,
+    api_key: str,
+    audio_bytes: Optional[bytes] = None,
+    audio_mime_type: Optional[str] = None,
+    raw_text: str = "",
+) -> ForensicAuditResponse:
+    """
+    Primary analysis pipeline: Google GenAI SDK.
+    1. First attempts native Google Search grounding (types.GoogleSearch).
+    2. If native search grounding hits 429 quota or fails, automatically retries
+       with Smart Hybrid Gemini: fetches live DDGS search snippets and feeds them
+       into Gemini's prompt with strict grounding instructions (NO search tool).
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=15000))
+
+    visual_context = (
+        f"\nVisual Forensics Metadata:\n"
+        f"- Image analyzed: {visual_forensics.has_image}\n"
+        f"- Tampering Likelihood: {visual_forensics.tampering_likelihood}\n"
+        f"- Software: {visual_forensics.exif_summary.software}\n"
+        f"- Camera: {visual_forensics.exif_summary.camera_model}\n"
+        f"- Metadata Anomalies: {', '.join(visual_forensics.exif_summary.anomalies) or 'None'}\n"
+    )
+
+    audio_part = None
+    if audio_bytes:
+        try:
+            audio_part = types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=audio_mime_type or "audio/mp3",
+            )
+        except Exception as e:
+            logger.warning(f"Could not prepare audio part for Gemini request: {e}")
+
+    # =========================================================================
+    # Phase 1: Native Google Search Grounding Attempt
+    # =========================================================================
+    native_prompt = (
+        f"{SYSTEM_INSTRUCTION}\n\n"
+        f"Forensic Evidence to Audit:\n{sanitized_input}\n{visual_context}"
+    )
+    native_config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        temperature=0.2,
+    )
+    native_payload: Any = [audio_part, native_prompt] if audio_part else native_prompt
+
+    native_response = None
+    native_last_err = None
+    native_model = None
+
+    for model_name in PRIMARY_GEMINI_MODELS:
+        try:
+            logger.info(f"Attempting primary analysis with Gemini (Native Search Grounding): {model_name}")
+            native_response = client.models.generate_content(
+                model=model_name,
+                contents=native_payload,
+                config=native_config,
+            )
+            if native_response and native_response.text:
+                native_model = model_name
+                break
+        except Exception as e:
+            logger.warning(f"Gemini native search grounding failed for {model_name}: {e}")
+            native_last_err = e
+
+    if native_response and native_response.text:
+        try:
+            raw_json = clean_and_parse_json(native_response.text)
+            grounding_sources: List[Dict[str, str]] = []
+            candidates = getattr(native_response, "candidates", [])
+            if candidates and hasattr(candidates[0], "grounding_metadata"):
+                gmeta = candidates[0].grounding_metadata
+                chunks = getattr(gmeta, "grounding_chunks", []) or []
+                for chunk in chunks:
+                    web = getattr(chunk, "web", None)
+                    if web and getattr(web, "uri", None):
+                        grounding_sources.append({
+                            "title": getattr(web, "title", "Google Search Source") or "Verified Source",
+                            "url": getattr(web, "uri", ""),
+                        })
+            return _build_forensic_response_from_json(
+                raw_json=raw_json,
+                visual_forensics=visual_forensics,
+                default_sources=grounding_sources,
+                engine_used=f"Google GenAI ({native_model} with Google Search Grounding)",
+                has_audio=bool(audio_bytes),
+            )
+        except Exception as parse_err:
+            logger.warning(f"Failed to parse native Gemini response: {parse_err}")
+            native_last_err = parse_err
+
+    # =========================================================================
+    # Phase 2: Smart Hybrid Gemini Fallback (DDGS Search Snippets in Prompt)
+    # Triggered when native search grounding hits 429 quota or fails
+    # =========================================================================
+    logger.info(
+        f"Native Google Search grounding unavailable ({native_last_err}). "
+        "Initiating Smart Hybrid Gemini fallback with live DDGS search snippets..."
+    )
+
+    query_text = raw_text or sanitized_input
+    search_context, collected_sources = _fetch_ddgs_snippets(query_text, max_results=5)
+
+    grounding_str = (
+        "\nLive Search Grounding Results (DDGS - Real-Time External Web Truth):\n"
+        + "\n".join(search_context)
+        if search_context
+        else "\nLive Search Grounding (DDGS): No external search results could be retrieved for this claim."
+    )
+    grounding_instruction = (
+        "\n\nSTRICT REAL-TIME SEARCH GROUNDING INSTRUCTIONS:\n"
+        "1. The search snippets above represent live real-time web facts. Ground all verdicts, claim evaluations, and explanations strictly in these provided search results.\n"
+        "2. Do NOT rely on your internal pre-training knowledge cutoff date to refute recent or newly confirmed facts (such as tournament victories, announcements, or events from 2024 to 2026). If the search snippets confirm the claim, mark it 'Verified'.\n"
+        "3. If the search snippets contradict the claim, classify it as 'Fabricated' or 'Misleading'.\n"
+        "4. If the search snippets are inconclusive or do not contain sufficient evidence to confirm or debunk the claim, classify it as 'Unverified' and explicitly state in the explanation that the retrieved search results were inconclusive, rather than guessing based on outdated pre-cutoff training data.\n"
+        "5. Attach the provided source titles and URLs to each relevant claim."
+    )
+
+    hybrid_prompt = (
+        f"{SYSTEM_INSTRUCTION}\n\n"
+        f"Forensic Evidence to Audit:\n{sanitized_input}\n{visual_context}\n{grounding_str}\n{grounding_instruction}"
+    )
+    hybrid_config = types.GenerateContentConfig(temperature=0.2)
+    hybrid_payload: Any = [audio_part, hybrid_prompt] if audio_part else hybrid_prompt
+
+    hybrid_response = None
+    hybrid_last_err = None
+    hybrid_model = None
+
+    for model_name in PRIMARY_GEMINI_MODELS:
+        try:
+            logger.info(f"Attempting Smart Hybrid Gemini analysis: {model_name} (with DDGS Grounding)")
+            hybrid_response = client.models.generate_content(
+                model=model_name,
+                contents=hybrid_payload,
+                config=hybrid_config,
+            )
+            if hybrid_response and hybrid_response.text:
+                hybrid_model = model_name
+                break
+        except Exception as e:
+            logger.warning(f"Smart Hybrid Gemini model {model_name} failed: {e}")
+            hybrid_last_err = e
+
+    if not hybrid_response or not hybrid_response.text:
+        raise RuntimeError(
+            f"All Gemini models (native and hybrid) failed. Native: {native_last_err}; Hybrid: {hybrid_last_err}"
+        )
+
+    raw_json = clean_and_parse_json(hybrid_response.text)
+    return _build_forensic_response_from_json(
+        raw_json=raw_json,
+        visual_forensics=visual_forensics,
+        default_sources=collected_sources,
+        engine_used=f"Google GenAI ({hybrid_model} with DDGS Grounding)",
+        has_audio=bool(audio_bytes),
     )
 
 
@@ -356,40 +523,27 @@ def _analyze_with_groq_and_ddgs(
 ) -> ForensicAuditResponse:
     """
     Fallback analysis pipeline: DDGS live search context paired with
-    Groq (llama-3.3-70b-versatile).
+    Groq LLMs, strictly grounded on real-time external search results.
     """
-    try:
-        from ddgs import DDGS
-    except ImportError:
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            from duckduckgo_search import DDGS
     from groq import Groq
 
-    # 1. Gather live web grounding context via DDGS
-    search_query = _build_search_query(raw_text)
-    search_context = []
-    collected_sources: List[Dict[str, str]] = []
-
-    try:
-        logger.info(f"Running fallback DDGS search for query: {search_query}")
-        with DDGS() as ddgs:
-            results = list(ddgs.text(search_query, max_results=4))
-            for r in results:
-                title = r.get("title", "")
-                url = r.get("href", "")
-                snippet = r.get("body", "")
-                if url:
-                    collected_sources.append({"title": title or "Web Source", "url": url})
-                    search_context.append(f"- [{title}]({url}): {snippet}")
-    except Exception as e:
-        logger.warning(f"DDGS web search failed: {e}")
+    # 1. Gather fresh live web grounding context via DDGS
+    search_context, collected_sources = _fetch_ddgs_snippets(raw_text, max_results=5)
 
     grounding_str = (
-        "\nLive Search Grounding Results (DDGS):\n" + "\n".join(search_context)
+        "\nLive Search Grounding Results (DDGS - Real-Time External Web Truth):\n"
+        + "\n".join(search_context)
         if search_context
-        else "\nLive Search Grounding: No external search results available."
+        else "\nLive Search Grounding (DDGS): No external search results could be retrieved for this claim."
+    )
+
+    grounding_instruction = (
+        "\n\nSTRICT REAL-TIME SEARCH GROUNDING INSTRUCTIONS:\n"
+        "1. The search snippets above represent live real-time web facts. Ground all verdicts, claim evaluations, and explanations strictly in these provided search results.\n"
+        "2. Do NOT rely on your internal pre-training knowledge cutoff date to refute recent or newly confirmed facts (such as tournament victories, announcements, or events from 2024 to 2026). If the search snippets confirm the claim, mark it 'Verified'.\n"
+        "3. If the search snippets contradict the claim, classify it as 'Fabricated' or 'Misleading'.\n"
+        "4. If the search snippets are inconclusive or do not contain sufficient evidence to confirm or debunk the claim, classify it as 'Unverified' and explicitly state in the explanation that the retrieved search results were inconclusive, rather than guessing based on outdated pre-cutoff training data.\n"
+        "5. Attach the provided source titles and URLs to each relevant claim."
     )
 
     visual_context = (
@@ -401,80 +555,49 @@ def _analyze_with_groq_and_ddgs(
         f"- Metadata Anomalies: {', '.join(visual_forensics.exif_summary.anomalies) or 'None'}\n"
     )
 
-    client = Groq(api_key=api_key)
-    completion = client.chat.completions.create(
-        model=FALLBACK_GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {
-                "role": "user",
-                "content": f"Forensic Evidence to Audit:\n{sanitized_input}\n{visual_context}\n{grounding_str}",
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.2,
+    user_content = (
+        f"Forensic Evidence to Audit:\n{sanitized_input}\n{visual_context}\n{grounding_str}\n{grounding_instruction}"
     )
+
+    client = Groq(api_key=api_key)
+    completion = None
+    last_groq_error = None
+    successful_model = None
+
+    for groq_model in FALLBACK_GROQ_MODELS:
+        try:
+            completion = client.chat.completions.create(
+                model=groq_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {
+                        "role": "user",
+                        "content": user_content,
+                    },
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1,
+            )
+            successful_model = groq_model
+            logger.info(f"Groq completion succeeded using model {groq_model}")
+            break
+        except Exception as ge:
+            last_groq_error = ge
+            logger.warning(f"Groq model {groq_model} failed: {ge}")
+
+    if not completion:
+        raise RuntimeError(f"All Groq models failed. Last error: {last_groq_error}")
 
     response_text = completion.choices[0].message.content or "{}"
     raw_json = clean_and_parse_json(response_text)
 
-    # Build atomic claims
-    claims = []
-    for c in raw_json.get("atomic_claims", []):
-        sources = [
-            SourceCitation(title=s.get("title", "Source"), url=s.get("url", ""))
-            for s in c.get("sources", [])
-        ]
-        if not sources and collected_sources:
-            sources = [SourceCitation(**s) for s in collected_sources[:2]]
-
-        status = c.get("status", "Unverified")
-        if status not in ("Verified", "Misleading", "Fabricated", "Unverified"):
-            status = "Unverified"
-
-        claims.append(
-            AtomicClaim(
-                claim=c.get("claim", "Extracted claim"),
-                status=status,
-                explanation=c.get("explanation", ""),
-                sources=sources,
-            )
-        )
-
-    flags = [
-        LinguisticFlag(
-            trigger=f.get("trigger", "Notice"),
-            evidence=f.get("evidence", ""),
-            severity=f.get("severity", "Low"),
-        )
-        for f in raw_json.get("linguistic_flags", [])
-    ]
-
-    verdict = raw_json.get("verdict", "Unverified")
-    if verdict not in ("Verified", "Misleading", "Fabricated", "Manipulated Media", "Unverified"):
-        verdict = "Unverified"
-
-    score = max(0, min(100, int(raw_json.get("overall_score", 50))))
-
     has_audio = bool(raw_json.get("audio_transcript"))
-    audio_forensics = AudioForensics(
-        has_audio=has_audio,
-        transcript=raw_json.get("audio_transcript"),
-        voice_synthetic_likelihood=raw_json.get("audio_synthetic_likelihood", "Low" if has_audio else "None"),
-    )
-
-    return ForensicAuditResponse(
-        overall_score=score,
-        verdict=verdict,
-        provenance_category=raw_json.get("provenance_category", "Audio Voice Note" if has_audio else "Claim Check"),
-        summary=raw_json.get("summary", "Forensic analysis completed via Groq fallback."),
-        atomic_claims=claims,
+    return _build_forensic_response_from_json(
+        raw_json=raw_json,
         visual_forensics=visual_forensics,
-        audio_forensics=audio_forensics,
-        linguistic_flags=flags,
-        whatsapp_card_en=raw_json.get("whatsapp_card_en", ""),
-        whatsapp_card_hi=raw_json.get("whatsapp_card_hi", ""),
-        engine_used="Groq Llama 3.3 70B (DDGS Grounded)",
+        default_sources=collected_sources,
+        engine_used=f"Groq {successful_model or 'Llama 3.3 70B'} (DDGS Grounded)",
+        has_audio=has_audio,
     )
 
 
@@ -635,7 +758,7 @@ def analyze_content(
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     groq_key = os.getenv("GROQ_API_KEY")
 
-    # 1. Attempt Primary Analysis: Google GenAI + Google Search grounding
+    # 1. Attempt Primary Analysis: Google GenAI (Native Grounding -> DDGS Hybrid)
     if gemini_key:
         try:
             logger.info("Executing primary analysis with Google GenAI...")
@@ -645,6 +768,7 @@ def analyze_content(
                 api_key=gemini_key,
                 audio_bytes=audio_bytes,
                 audio_mime_type=audio_mime_type,
+                raw_text=raw_combined,
             )
         except Exception as e:
             logger.warning(f"Primary Gemini analysis failed: {e}. Routing to Groq + DDGS fallback...")
