@@ -3,6 +3,8 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
+  Mic,
+  Volume2,
   UploadCloud,
   Zap,
   AlertCircle,
@@ -29,6 +31,9 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [imageQuery, setImageQuery] = useState('')
+  const [audioFile, setAudioFile] = useState(null)
+  const [audioPreview, setAudioPreview] = useState(null)
+  const [audioQuery, setAudioQuery] = useState('')
   const [isDragging, setIsDragging] = useState(false)
 
   // Loading & stage state
@@ -38,6 +43,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
   const [recentResult, setRecentResult] = useState(null)
 
   const fileInputRef = useRef(null)
+  const audioInputRef = useRef(null)
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   // Animate loading stages while analysis runs
@@ -79,6 +85,72 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
     setImageFile(null)
     setImagePreview(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleAudioSelect = (file) => {
+    if (!file) return
+    const validExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.webm', '.flac', '.opus']
+    const nameLower = file.name.toLowerCase()
+    const isValidExt = validExtensions.some((ext) => nameLower.endsWith(ext))
+    if (!file.type.startsWith('audio/') && !isValidExt) {
+      setError('Please select a valid audio file (MP3, WAV, OGG, M4A, AAC, WEBM, FLAC).')
+      return
+    }
+    setError(null)
+    setAudioFile(file)
+    const previewUrl = URL.createObjectURL(file)
+    setAudioPreview(previewUrl)
+  }
+
+  const clearAudio = () => {
+    if (audioPreview && audioPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(audioPreview)
+    }
+    setAudioFile(null)
+    setAudioPreview(null)
+    if (audioInputRef.current) audioInputRef.current.value = ''
+  }
+
+  // Create synthetic test audio for Sample 4
+  const createSampleAudioFile = () => {
+    const sampleRate = 8000
+    const numChannels = 1
+    const bitsPerSample = 16
+    const numSamples = sampleRate * 1.5 // 1.5s
+    const blockAlign = numChannels * (bitsPerSample / 8)
+    const byteRate = sampleRate * blockAlign
+    const dataSize = numSamples * blockAlign
+    const buffer = new ArrayBuffer(44 + dataSize)
+    const view = new DataView(buffer)
+
+    const writeString = (offset, str) => {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i))
+      }
+    }
+    writeString(0, 'RIFF')
+    view.setUint32(4, 36 + dataSize, true)
+    writeString(8, 'WAVE')
+    writeString(12, 'fmt ')
+    view.setUint32(16, 16, true)
+    view.setUint16(20, 1, true)
+    view.setUint16(22, numChannels, true)
+    view.setUint32(24, sampleRate, true)
+    view.setUint32(28, byteRate, true)
+    view.setUint16(32, blockAlign, true)
+    view.setUint16(34, bitsPerSample, true)
+    writeString(36, 'data')
+    view.setUint32(40, dataSize, true)
+
+    let offset = 44
+    for (let i = 0; i < numSamples; i++) {
+      const sample = Math.sin((i / sampleRate) * 2 * Math.PI * 440) * 8000
+      view.setInt16(offset, sample, true)
+      offset += 2
+    }
+
+    const blob = new Blob([buffer], { type: 'audio/wav' })
+    return new File([blob], 'viral_voice_note_leak.wav', { type: 'audio/wav' })
   }
 
   // Create synthetic test image for Sample 3
@@ -147,6 +219,14 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
           if (imageQuery.trim()) {
             formData.append('text', imageQuery.trim())
           }
+        } else if (activeTab === 'audio') {
+          if (!audioFile) {
+            throw new Error('Please upload an audio voice note to analyze.')
+          }
+          formData.append('audio', audioFile)
+          if (audioQuery.trim()) {
+            formData.append('text', audioQuery.trim())
+          }
         }
       }
 
@@ -194,6 +274,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
       fd.append('url', url)
       await executeAnalysis(fd, null)
     } else if (sampleType === 'meme_image') {
+      clearAudio()
       setActiveTab('image')
       const file = await createSampleImageFile()
       const previewUrl = URL.createObjectURL(file)
@@ -205,6 +286,19 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
       fd.append('image', file)
       fd.append('text', query)
       await executeAnalysis(fd, previewUrl)
+    } else if (sampleType === 'viral_audio') {
+      clearImage()
+      setActiveTab('audio')
+      const file = createSampleAudioFile()
+      const previewUrl = URL.createObjectURL(file)
+      setAudioFile(file)
+      setAudioPreview(previewUrl)
+      const query = 'Urgent voice note circulating on WhatsApp: Immediate emergency lockdown declared starting midnight.'
+      setAudioQuery(query)
+      const fd = new FormData()
+      fd.append('audio', file)
+      fd.append('text', query)
+      await executeAnalysis(fd, null)
     }
   }
 
@@ -212,7 +306,9 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
     setTextInput('')
     setUrlInput('')
     clearImage()
+    clearAudio()
     setImageQuery('')
+    setAudioQuery('')
     setError(null)
     setRecentResult(null)
     if (onReset) onReset()
@@ -231,7 +327,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             Real Live POST /api/analyze
           </span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
           <button
             type="button"
             onClick={() => handleTriggerSample('viral_text')}
@@ -243,10 +339,10 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             </div>
             <div>
               <div className="font-semibold text-white group-hover:text-accent transition">
-                Viral WhatsApp Forward
+                Viral Forward
               </div>
               <div className="text-[10px] text-slate-400 line-clamp-1 font-mono">
-                UNESCO Anthem declaration claim
+                UNESCO Anthem claim
               </div>
             </div>
           </button>
@@ -262,10 +358,10 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             </div>
             <div>
               <div className="font-semibold text-white group-hover:text-accent transition">
-                News URL Fact-Check
+                News URL
               </div>
               <div className="text-[10px] text-slate-400 line-clamp-1 font-mono">
-                Wikipedia article reference
+                Wikipedia article
               </div>
             </div>
           </button>
@@ -281,10 +377,29 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             </div>
             <div>
               <div className="font-semibold text-white group-hover:text-accent transition">
-                Manipulated Media & Note
+                Manipulated Media
               </div>
               <div className="text-[10px] text-slate-400 line-clamp-1 font-mono">
-                ₹5000 specimen image claim
+                ₹5000 specimen image
+              </div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleTriggerSample('viral_audio')}
+            disabled={isLoading}
+            className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg bg-surface border border-surface-border hover:border-accent hover:bg-surface-hover text-left transition text-xs group disabled:opacity-50"
+          >
+            <div className="p-1.5 rounded-md bg-purple-500/10 text-purple-400 group-hover:bg-accent/10 group-hover:text-accent transition">
+              <Mic className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-semibold text-white group-hover:text-accent transition">
+                Viral Voice Note
+              </div>
+              <div className="text-[10px] text-slate-400 line-clamp-1 font-mono">
+                Lockdown audio leak
               </div>
             </div>
           </button>
@@ -297,7 +412,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
         <div className="h-1 w-full bg-gradient-to-r from-accent-dark via-accent to-emerald-400"></div>
 
         {/* Tab Controls */}
-        <div className="flex border-b border-surface-border bg-background/50 px-4 pt-3 gap-2">
+        <div className="flex border-b border-surface-border bg-background/50 px-4 pt-3 gap-2 overflow-x-auto">
           <button
             type="button"
             onClick={() => {
@@ -360,6 +475,29 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             <ImageIcon className="w-4 h-4" />
             <span>Image Forensics</span>
             {activeTab === 'image' && (
+              <motion.div
+                layoutId="activeTabBadge"
+                className="absolute -top-1 left-0 right-0 h-0.5 bg-accent rounded-full"
+              />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('audio')
+              setError(null)
+            }}
+            disabled={isLoading}
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition relative ${
+              activeTab === 'audio'
+                ? 'bg-surface text-accent border-t border-x border-surface-border'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Mic className="w-4 h-4" />
+            <span>Voice Note</span>
+            {activeTab === 'audio' && (
               <motion.div
                 layoutId="activeTabBadge"
                 className="absolute -top-1 left-0 right-0 h-0.5 bg-accent rounded-full"
@@ -499,6 +637,96 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             </div>
           )}
 
+          {/* Audio Input Mode */}
+          {activeTab === 'audio' && (
+            <div className="space-y-4">
+              <label className="block text-xs font-mono font-medium text-slate-300">
+                UPLOAD AUDIO VOICE NOTE OR CALL RECORDING
+              </label>
+
+              {!audioPreview ? (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    setIsDragging(true)
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    setIsDragging(false)
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      handleAudioSelect(e.dataTransfer.files[0])
+                    }
+                  }}
+                  onClick={() => audioInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition ${
+                    isDragging
+                      ? 'border-purple-400 bg-purple-500/10'
+                      : 'border-surface-border hover:border-purple-400/60 bg-background/50 hover:bg-background'
+                  }`}
+                >
+                  <div className="w-12 h-12 rounded-full bg-surface flex items-center justify-center text-purple-400 mb-3 border border-surface-border">
+                    <Mic className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-200 mb-1">
+                    Drag and drop your audio clip here, or <span className="text-purple-400">browse</span>
+                  </p>
+                  <p className="text-xs text-slate-400 font-mono">
+                    Supports MP3, WAV, OGG, M4A, AAC, WEBM (Max 25MB) • Audits Voice Deepfake & Claims
+                  </p>
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.webm,.flac"
+                    className="hidden"
+                    onChange={(e) => handleAudioSelect(e.target.files?.[0])}
+                  />
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-background border border-surface-border space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="p-2 rounded-lg bg-purple-500/15 text-purple-400 border border-purple-500/30">
+                        <Volume2 className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-white truncate">{audioFile?.name}</p>
+                        <p className="text-xs text-slate-400 font-mono">
+                          {audioFile?.size ? (audioFile.size / 1024).toFixed(1) : '0'} KB • Ready for Acoustic & Claim Audit
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={clearAudio}
+                      disabled={isLoading}
+                      className="p-2 rounded-lg bg-surface border border-surface-border hover:border-red-500/50 hover:text-red-400 text-slate-400 transition"
+                      title="Remove audio"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <audio controls src={audioPreview} className="w-full h-10 rounded-lg" />
+                </div>
+              )}
+
+              {/* Optional contextual claim text */}
+              <div>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">
+                  ACCOMPANYING CLAIM OR CONTEXT (OPTIONAL)
+                </label>
+                <input
+                  type="text"
+                  value={audioQuery}
+                  onChange={(e) => setAudioQuery(e.target.value)}
+                  disabled={isLoading}
+                  placeholder="e.g. 'Viral voice note claiming emergency curfew declared starting tonight'"
+                  className="w-full rounded-lg bg-background border border-surface-border px-3.5 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-accent transition font-sans"
+                />
+              </div>
+            </div>
+          )}
+
           {/* Error Banner */}
           <AnimatePresence>
             {error && (
@@ -563,7 +791,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             <button
               type="button"
               onClick={handleResetForm}
-              disabled={isLoading || (!textInput && !urlInput && !imageFile && !recentResult)}
+              disabled={isLoading || (!textInput && !urlInput && !imageFile && !audioFile && !recentResult)}
               className="px-4 py-2 rounded-lg text-xs font-mono text-slate-400 hover:text-white disabled:opacity-30 transition"
             >
               Clear

@@ -19,6 +19,9 @@ import {
   AlertOctagon,
   ArrowUpRight,
   RotateCcw,
+  Mic,
+  Volume2,
+  Activity,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -104,6 +107,7 @@ export default function ForensicAuditReport({ audit, originalImagePreview, onNew
   }
 
   const hasImage = audit.visual_forensics?.has_image && audit.visual_forensics?.ela_heatmap_base64
+  const hasAudio = audit.audio_forensics?.has_audio
 
   return (
     <motion.div
@@ -351,6 +355,91 @@ export default function ForensicAuditReport({ audit, originalImagePreview, onNew
               </ul>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* LAYER 2B: AUDIO VOICE NOTE FORENSICS (WHEN HAS_AUDIO)    */}
+      {/* ======================================================== */}
+      {hasAudio && (
+        <div className="bg-surface rounded-2xl border border-surface-border shadow-2xl p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-surface-border pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Mic className="w-5 h-5 text-purple-400" />
+                <h3 className="text-lg font-bold text-white tracking-tight">
+                  Layer 2B: Audio & Synthetic Voice Forensics
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Acoustic analysis, deepfake voice clone probability & speech-to-text extraction
+              </p>
+            </div>
+            <span className="text-xs font-mono px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold self-start sm:self-auto">
+              Voice Note Audited
+            </span>
+          </div>
+
+          {/* Synthetic Voice Likelihood & Acoustic Metrics */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+            <div className="bg-background rounded-xl p-4 border border-surface-border">
+              <div className="text-[11px] font-mono text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-purple-400" />
+                Voice Clone Likelihood
+              </div>
+              <div
+                className={`text-base font-extrabold font-mono ${
+                  audit.audio_forensics.voice_synthetic_likelihood === 'High'
+                    ? 'text-red-400'
+                    : audit.audio_forensics.voice_synthetic_likelihood === 'Medium'
+                    ? 'text-amber-400'
+                    : audit.audio_forensics.voice_synthetic_likelihood === 'Low'
+                    ? 'text-yellow-300'
+                    : 'text-emerald-400'
+                }`}
+              >
+                {audit.audio_forensics.voice_synthetic_likelihood || 'None'}
+              </div>
+            </div>
+
+            <div className="bg-background rounded-xl p-4 border border-surface-border">
+              <div className="text-[11px] font-mono text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-accent" />
+                Speech Engine
+              </div>
+              <div className="text-sm font-semibold text-white font-mono">
+                Multimodal Audio Pipeline
+              </div>
+            </div>
+
+            <div className="bg-background rounded-xl p-4 border border-surface-border">
+              <div className="text-[11px] font-mono text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Volume2 className="w-3.5 h-3.5 text-slate-300" />
+                Acoustic Duration
+              </div>
+              <div className="text-sm font-semibold text-white font-mono">
+                {audit.audio_forensics.duration_seconds
+                  ? `${audit.audio_forensics.duration_seconds.toFixed(1)}s`
+                  : 'Audio Stream'}
+              </div>
+            </div>
+          </div>
+
+          {/* Transcript Display */}
+          <div className="space-y-2">
+            <div className="text-xs font-mono uppercase text-slate-400 font-semibold tracking-wider flex items-center gap-2">
+              <Volume2 className="w-4 h-4 text-purple-400" />
+              <span>Decoded Spoken Audio Transcript</span>
+            </div>
+            <div className="p-4 rounded-xl bg-background border border-surface-border text-sm text-slate-200 font-sans leading-relaxed whitespace-pre-wrap">
+              {audit.audio_forensics.transcript || 'Spoken audio payload processed into claim decomposition.'}
+            </div>
+          </div>
+
+          {/* Deepfake Voice Guidance */}
+          <div className="text-xs text-slate-400 bg-background/50 p-3.5 rounded-xl border border-surface-border font-mono leading-relaxed">
+            <span className="text-purple-400 font-semibold">How to read Audio Forensics:</span> Deepfake audio clones often exhibit unnatural spectral phase continuity, synthetic pitch flatlining, robotic formants, or lack of ambient room reverberation.
+          </div>
         </div>
       )}
 

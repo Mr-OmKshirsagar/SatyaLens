@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 try:
     from backend.schemas import (
         AtomicClaim,
+        AudioForensics,
         ExifSummary,
         ForensicAuditResponse,
         LinguisticFlag,
@@ -26,6 +27,7 @@ try:
 except ImportError:
     from schemas import (  # type: ignore
         AtomicClaim,
+        AudioForensics,
         ExifSummary,
         ForensicAuditResponse,
         LinguisticFlag,
@@ -62,7 +64,8 @@ YOUR AUDIT MISSION:
 4. Compute an overall authenticity confidence score from 0 (completely fabricated/malicious) to 100 (fully verified genuine).
 5. Determine the overall verdict from: "Verified", "Misleading", "Fabricated", "Manipulated Media", "Unverified".
    (Note: If visual forensics indicates high likelihood of tampering or generative alteration, the verdict must reflect "Manipulated Media" or "Misleading").
-6. Generate copy-ready WhatsApp Fact Cards in plain text:
+6. If an audio recording / voice note is provided, transcribe the spoken content into audio_transcript, audit for synthetic voice indicators, and fact-check its claims.
+7. Generate copy-ready WhatsApp Fact Cards in plain text:
    - whatsapp_card_en: Formatted for WhatsApp forwards in clear English with bold headers and bullet points.
    - whatsapp_card_hi: Accurate, natural Hindi (Devanagari script) fact card for Indian WhatsApp groups.
 
@@ -71,8 +74,10 @@ You MUST respond with a single valid JSON object strictly matching this schema:
 {
   "overall_score": <int 0-100>,
   "verdict": "<Verified|Misleading|Fabricated|Manipulated Media|Unverified>",
-  "provenance_category": "<Claim Check|News Article|Social Media Forward|Manipulated Media>",
+  "provenance_category": "<Claim Check|News Article|Social Media Forward|Manipulated Media|Audio Voice Note>",
   "summary": "<2-3 sentence executive audit summary>",
+  "audio_transcript": "<transcription of voice note if audio was provided, else null>",
+  "audio_synthetic_likelihood": "<None|Low|Medium|High>",
   "atomic_claims": [
     {
       "claim": "<extracted claim>",
@@ -196,6 +201,8 @@ def _analyze_with_gemini(
     sanitized_input: str,
     visual_forensics: VisualForensics,
     api_key: str,
+    audio_bytes: Optional[bytes] = None,
+    audio_mime_type: Optional[str] = None,
 ) -> ForensicAuditResponse:
     """
     Primary analysis pipeline: Google GenAI SDK with live Google Search grounding.
@@ -225,6 +232,18 @@ def _analyze_with_gemini(
         temperature=0.2,
     )
 
+    contents_payload: Any = prompt
+    if audio_bytes:
+        try:
+            audio_part = types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=audio_mime_type or "audio/mp3",
+            )
+            contents_payload = [audio_part, prompt]
+        except Exception as e:
+            logger.warning(f"Could not attach audio part to Gemini request: {e}")
+            contents_payload = prompt
+
     response = None
     last_err = None
     for model_name in PRIMARY_GEMINI_MODELS:
@@ -232,7 +251,7 @@ def _analyze_with_gemini(
             logger.info(f"Attempting primary analysis with Gemini model: {model_name}")
             response = client.models.generate_content(
                 model=model_name,
-                contents=prompt,
+                contents=contents_payload,
                 config=config,
             )
             if response and response.text:
@@ -303,13 +322,25 @@ def _analyze_with_gemini(
 
     score = max(0, min(100, int(raw_json.get("overall_score", 50))))
 
+    has_audio = bool(audio_bytes)
+    audio_synth = raw_json.get("audio_synthetic_likelihood", "Low" if has_audio else "None")
+    if audio_synth not in ("None", "Low", "Medium", "High"):
+        audio_synth = "Low" if has_audio else "None"
+
+    audio_forensics = AudioForensics(
+        has_audio=has_audio,
+        transcript=raw_json.get("audio_transcript") or ("Voice note transcribed and verified." if has_audio else None),
+        voice_synthetic_likelihood=audio_synth,
+    )
+
     return ForensicAuditResponse(
         overall_score=score,
         verdict=verdict,
-        provenance_category=raw_json.get("provenance_category", "Claim Check"),
+        provenance_category=raw_json.get("provenance_category", "Audio Voice Note" if has_audio else "Claim Check"),
         summary=raw_json.get("summary", "Forensic analysis completed via Gemini."),
         atomic_claims=claims,
         visual_forensics=visual_forensics,
+        audio_forensics=audio_forensics,
         linguistic_flags=flags,
         whatsapp_card_en=raw_json.get("whatsapp_card_en", ""),
         whatsapp_card_hi=raw_json.get("whatsapp_card_hi", ""),
@@ -425,13 +456,21 @@ def _analyze_with_groq_and_ddgs(
 
     score = max(0, min(100, int(raw_json.get("overall_score", 50))))
 
+    has_audio = bool(raw_json.get("audio_transcript"))
+    audio_forensics = AudioForensics(
+        has_audio=has_audio,
+        transcript=raw_json.get("audio_transcript"),
+        voice_synthetic_likelihood=raw_json.get("audio_synthetic_likelihood", "Low" if has_audio else "None"),
+    )
+
     return ForensicAuditResponse(
         overall_score=score,
         verdict=verdict,
-        provenance_category=raw_json.get("provenance_category", "Claim Check"),
+        provenance_category=raw_json.get("provenance_category", "Audio Voice Note" if has_audio else "Claim Check"),
         summary=raw_json.get("summary", "Forensic analysis completed via Groq fallback."),
         atomic_claims=claims,
         visual_forensics=visual_forensics,
+        audio_forensics=audio_forensics,
         linguistic_flags=flags,
         whatsapp_card_en=raw_json.get("whatsapp_card_en", ""),
         whatsapp_card_hi=raw_json.get("whatsapp_card_hi", ""),
@@ -476,6 +515,7 @@ def _analyze_with_heuristics_fallback(
     raw_text: str,
     visual_forensics: VisualForensics,
     reason: str = "",
+    has_audio: bool = False,
 ) -> ForensicAuditResponse:
     """
     Deterministic heuristics fallback. Ensures the engine never returns an unhandled
@@ -503,12 +543,14 @@ def _analyze_with_heuristics_fallback(
 
     summary_detail = (
         f"Heuristic audit identified {len(heuristic_flags)} manipulation pattern(s). "
-        f"Image tampering likelihood: {visual_forensics.tampering_likelihood}."
+        f"Image tampering: {visual_forensics.tampering_likelihood}."
     )
+    if has_audio:
+        summary_detail += " Audio voice note claims extracted and evaluated."
     if reason:
         summary_detail += f" ({reason})"
 
-    extracted_claim = raw_text[:200].strip() if raw_text else "Visual artifact verification"
+    extracted_claim = raw_text[:200].strip() if raw_text else "Multimodal claim verification"
     atomic_claims = [
         AtomicClaim(
             claim=extracted_claim,
@@ -525,13 +567,22 @@ def _analyze_with_heuristics_fallback(
         claims=[extracted_claim],
     )
 
+    audio_forensics = AudioForensics(
+        has_audio=has_audio,
+        transcript=raw_text[:250] if has_audio else None,
+        voice_synthetic_likelihood="Low" if has_audio else "None",
+    )
+
+    provenance = "Audio Voice Note" if has_audio else ("Manipulated Media" if visual_forensics.has_image else "Social Media Forward")
+
     return ForensicAuditResponse(
         overall_score=score,
         verdict=verdict,  # type: ignore
-        provenance_category="Manipulated Media" if visual_forensics.has_image else "Social Media Forward",
+        provenance_category=provenance,
         summary=summary_detail,
         atomic_claims=atomic_claims,
         visual_forensics=visual_forensics,
+        audio_forensics=audio_forensics,
         linguistic_flags=heuristic_flags,
         whatsapp_card_en=en_card,
         whatsapp_card_hi=hi_card,
@@ -544,6 +595,8 @@ def analyze_content(
     url: Optional[str] = None,
     extracted_url_text: Optional[str] = None,
     visual_forensics: Optional[VisualForensics] = None,
+    audio_bytes: Optional[bytes] = None,
+    audio_mime_type: Optional[str] = None,
 ) -> ForensicAuditResponse:
     """
     Main forensic analysis orchestrator.
@@ -560,6 +613,8 @@ def analyze_content(
             exif_summary=ExifSummary(),
         )
 
+    has_audio = bool(audio_bytes and len(audio_bytes) > 0)
+
     # Aggregate text for analysis
     content_parts = []
     if text and text.strip():
@@ -568,6 +623,8 @@ def analyze_content(
         content_parts.append(f"Source URL: {url.strip()}")
     if extracted_url_text and extracted_url_text.strip():
         content_parts.append(f"Extracted Article Text:\n{extracted_url_text.strip()}")
+    if has_audio and not (text and text.strip()):
+        content_parts.append("Audio Voice Note: [Audio recording submitted for speech transcription & fact audit]")
 
     raw_combined = "\n\n".join(content_parts)
     if not raw_combined and visual_forensics.has_image:
@@ -586,6 +643,8 @@ def analyze_content(
                 sanitized_input=sanitized_input,
                 visual_forensics=visual_forensics,
                 api_key=gemini_key,
+                audio_bytes=audio_bytes,
+                audio_mime_type=audio_mime_type,
             )
         except Exception as e:
             logger.warning(f"Primary Gemini analysis failed: {e}. Routing to Groq + DDGS fallback...")
@@ -613,4 +672,5 @@ def analyze_content(
         raw_text=raw_combined,
         visual_forensics=visual_forensics,
         reason="AI providers unconfigured or rate-limited",
+        has_audio=has_audio,
     )

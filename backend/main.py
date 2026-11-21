@@ -98,11 +98,46 @@ def analyze_claim(
                 detail=f"Unable to read uploaded image: {e}",
             )
 
+    # Process audio if provided (P1 Voice Note Analysis)
+    audio_bytes: Optional[bytes] = None
+    audio_mime_type: Optional[str] = None
+    if audio and hasattr(audio, "filename") and audio.filename:
+        valid_audio_exts = (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".webm", ".flac", ".opus", ".mp4")
+        if not any(audio.filename.lower().endswith(ext) for ext in valid_audio_exts):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported audio format: {audio.filename}. Allowed formats: MP3, WAV, OGG, M4A, AAC, WEBM, FLAC.",
+            )
+        try:
+            if hasattr(audio, "file"):
+                audio_bytes = audio.file.read()
+            elif hasattr(audio, "read"):
+                res = audio.read()
+                audio_bytes = res if isinstance(res, bytes) else None
+            if not audio_bytes or len(audio_bytes) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Uploaded audio file is empty.",
+                )
+            if len(audio_bytes) > 25 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Audio file exceeds maximum allowable size of 25MB.",
+                )
+            audio_mime_type = getattr(audio, "content_type", None) or "audio/mp3"
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unable to read uploaded audio: {e}",
+            )
+
     # 400 Bad Request if no valid input is supplied
-    if not clean_text and not clean_url and not image_bytes:
+    if not clean_text and not clean_url and not image_bytes and not audio_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No valid input provided. Please provide text, a URL, or an image file.",
+            detail="No valid input provided. Please provide text, a URL, an image file, or an audio voice note.",
         )
 
     # Extract URL content if provided
@@ -156,6 +191,8 @@ def analyze_claim(
         url=clean_url,
         extracted_url_text=extracted_url_text,
         visual_forensics=visual_forensics,
+        audio_bytes=audio_bytes,
+        audio_mime_type=audio_mime_type,
     )
 
     return report

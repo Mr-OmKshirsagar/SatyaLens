@@ -52,6 +52,15 @@ class LinguisticFlag(BaseModel):
     )
 
 
+class AudioForensics(BaseModel):
+    has_audio: bool = Field(False, description="Whether an audio recording/voice note was submitted")
+    transcript: Optional[str] = Field(None, description="Transcribed speech from the voice note")
+    duration_seconds: Optional[float] = Field(None, description="Audio duration if detectable")
+    voice_synthetic_likelihood: Literal["None", "Low", "Medium", "High"] = Field(
+        "None", description="Estimated likelihood of AI voice clone or synthetic speech"
+    )
+
+
 class ForensicAuditResponse(BaseModel):
     overall_score: int = Field(
         ..., ge=0, le=100, description="Authenticity confidence score from 0 (Fabricated) to 100 (Verified)"
@@ -68,6 +77,9 @@ class ForensicAuditResponse(BaseModel):
     )
     visual_forensics: VisualForensics = Field(
         default_factory=VisualForensics, description="Image forensics and ELA findings"
+    )
+    audio_forensics: AudioForensics = Field(
+        default_factory=AudioForensics, description="Audio voice-note transcription and forensics"
     )
     linguistic_flags: List[LinguisticFlag] = Field(
         default_factory=list, description="Detected manipulation and scam indicators"

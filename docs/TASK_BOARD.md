@@ -26,4 +26,4 @@
 
 ## Phase 3: Deployment, QA & Optional P1
 - [x] **Step 8:** Add deployment configuration (`render.yaml` / `vercel.json` as needed) and run full incognito verification across desktop and mobile viewports via Chrome DevTools MCP.
-- [ ] **Step 9 (P1 Stretch Only):** Add optional `audio` voice-note support to `POST /api/analyze` and UI only if Steps 1–8 are complete and verified with time remaining.
+- [x] **Step 9 (P1 Stretch Only):** Add optional `audio` voice-note support to `POST /api/analyze` and UI only if Steps 1–8 are complete and verified with time remaining.
