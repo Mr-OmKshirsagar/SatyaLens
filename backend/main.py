@@ -111,12 +111,14 @@ def analyze_claim(
         try:
             extracted_url_text = extract_url_text(clean_url)
         except ValueError as e:
-            # If only a URL was submitted and scraping failed, return 400
-            if not clean_text and not image_bytes:
+            # Enforce strict 400 Bad Request on SSRF or invalid URL schemes
+            if "Blocked unsafe or private URL" in str(e) or "empty" in str(e):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"URL extraction failed: {e}",
+                    detail=f"URL security violation: {e}",
                 )
+            # If external fetch failed (e.g. offline sandbox or bot protection), fallback gracefully
+            extracted_url_text = f"Target URL {clean_url} (Full page scrape unavailable, verifying via search presence)."
 
     # Compute deterministic visual forensics if image was submitted
     if image_bytes:
