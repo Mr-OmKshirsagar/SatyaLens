@@ -28,8 +28,11 @@ MAX_IMAGE_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 def generate_ela_heatmap(image_bytes: bytes) -> str:
     """
     Generates an Error Level Analysis (ELA) heatmap for the given image bytes.
-    Re-saves the image at JPEG quality 90, computes the amplified pixel difference
-    between the original and re-saved versions, and returns a base64 JPEG data URI.
+    Re-saves the image at JPEG quality 90, computes non-linear gamma-amplified
+    pixel differences with localized anomaly boosting, and returns a base64 JPEG data URI.
+
+    Ensures localized modifications (e.g., mosaic pixelation, brush strokes, spliced
+    foreign elements) are visually prominent even when whole-image error averages are low.
 
     Args:
         image_bytes: Raw bytes of the uploaded image.
@@ -66,20 +69,29 @@ def generate_ela_heatmap(image_bytes: bytes) -> str:
     resaved_buffer.seek(0)
     resaved = Image.open(resaved_buffer).convert("RGB")
 
-    # Compute difference
-    diff = ImageChops.difference(orig, resaved)
+    # Compute per-pixel difference array
+    orig_arr = np.asarray(orig, dtype=np.float32)
+    resaved_arr = np.asarray(resaved, dtype=np.float32)
+    diff_arr = np.abs(orig_arr - resaved_arr)
 
-    # Determine amplification scale based on maximum error level
-    extrema = diff.getextrema()  # Tuple of (min, max) for each channel R, G, B
-    max_diff = max(ex[1] for ex in extrema) if extrema else 0
+    # Per-pixel max error across R, G, B channels
+    error_mag = np.max(diff_arr, axis=2)
+    p99_5 = float(np.percentile(error_mag, 99.5))
+    norm_max = max(p99_5, 6.0)
 
-    if max_diff > 0:
-        # Forensic scale: amplify differences up to 15x or stretch to max contrast
-        scale = min(255.0 / max_diff, 15.0)
-    else:
-        scale = 1.0
+    # Non-linear gamma amplification: expands subtle local block error into clear visibility
+    normalized = np.clip(diff_arr / norm_max, 0.0, 1.0)
+    amplified = np.power(normalized, 0.7) * 255.0
 
-    enhanced = ImageEnhance.Brightness(diff).enhance(scale)
+    # Local anomaly boost: highlight regions with error elevated above background median
+    med_error = float(np.median(error_mag))
+    anomaly_mask = error_mag > max(med_error * 2.5, 4.0)
+
+    highlighted = amplified.copy()
+    if np.any(anomaly_mask):
+        highlighted[anomaly_mask] = np.clip(amplified[anomaly_mask] * 1.35 + 25.0, 0, 255)
+
+    enhanced = Image.fromarray(np.clip(highlighted, 0, 255).astype(np.uint8))
 
     # Export amplified heatmap to base64 JPEG
     out_buffer = io.BytesIO()
@@ -118,7 +130,7 @@ def extract_exif_metadata(image_bytes: bytes) -> Dict[str, Any]:
         img = Image.open(io.BytesIO(image_bytes))
         exif = img.getexif()
         if not exif:
-            result["anomalies"].append("No EXIF metadata present (common for web uploads, social media re-encodings, or screenshots).")
+            # Missing EXIF is standard on social media / WhatsApp / web uploads; treat as neutral, not a tampering anomaly.
             return result
 
         # Map tag IDs to human-readable tag names
@@ -164,18 +176,18 @@ def extract_exif_metadata(image_bytes: bytes) -> Dict[str, Any]:
             known_manipulation_keywords = [
                 "photoshop", "gimp", "canva", "lightroom", "procreate",
                 "snapseed", "picsart", "fotor", "midjourney", "stable diffusion",
-                "dall-e", "comfyui", "automatic1111", "firefly"
+                "dall-e", "comfyui", "automatic1111", "firefly",
+                "android gallery", "gallery", "samsung gallery", "samsung editor",
+                "google photos", "apple photos", "photo editor", "pixlr",
+                "vsco", "facetune", "remini", "meitu", "inshot",
             ]
             software_lower = software_str.lower()
             if any(keyword in software_lower for keyword in known_manipulation_keywords):
                 result["anomalies"].append(f"Editing software signature detected: {software_str}")
 
-        # Anomaly rules
+        # Anomaly rules (only flag genuine software mismatches)
         if result["software"] and not result["camera_model"]:
             result["anomalies"].append("Software signature found without camera hardware details (suggests digital synthesis or template export).")
-
-        if not result["software"] and not result["camera_model"] and len(tag_dict) <= 2:
-            result["anomalies"].append("Minimal EXIF tags found; metadata may have been partially sanitized.")
 
         return result
     except Exception as e:
@@ -183,10 +195,27 @@ def extract_exif_metadata(image_bytes: bytes) -> Dict[str, Any]:
         return result
 
 
-def compute_tampering_likelihood(image_bytes: bytes, exif_info: Optional[Dict[str, Any]] = None) -> str:
+def compute_tampering_likelihood(
+    image_bytes: bytes,
+    exif_info: Optional[Dict[str, Any]] = None,
+    return_metrics: bool = False,
+) -> Any:
     """
     Estimates visual tampering likelihood ('None', 'Low', 'Medium', 'High')
-    by evaluating ELA pixel-error variance and EXIF software anomalies.
+    by evaluating multi-scale local patch ELA variance, sharp boundary gradient detection,
+    and EXIF software/hardware anomaly indicators.
+
+    Detects localized modifications (such as mosaic blocks, brush strokes, and spliced
+    foreign elements) even when EXIF metadata has been completely stripped.
+
+    Args:
+        image_bytes: Raw bytes of the uploaded image.
+        exif_info: Optional parsed EXIF summary dictionary.
+        return_metrics: If True, returns a tuple (verdict, metrics_dict).
+                        If False, returns just the verdict string for backwards compatibility.
+
+    Returns:
+        verdict string ("None"|"Low"|"Medium"|"High") or tuple (verdict, metrics_dict).
     """
     try:
         orig = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -201,27 +230,136 @@ def compute_tampering_likelihood(image_bytes: bytes, exif_info: Optional[Dict[st
         orig_arr = np.asarray(orig, dtype=np.float32)
         resaved_arr = np.asarray(resaved, dtype=np.float32)
         diff_arr = np.abs(orig_arr - resaved_arr)
+        error_map = np.max(diff_arr, axis=2)
 
-        # High variance in error levels across the image suggests composite/tampered elements
-        diff_std = float(np.std(diff_arr))
-        diff_99th = float(np.percentile(diff_arr, 99))
+        # 1. Global statistics
+        global_mean = float(np.mean(error_map))
+        global_std = float(np.std(error_map))
+        global_p99 = float(np.percentile(error_map, 99))
 
-        # Check for software indicators in EXIF
+        # 2. Local patch-level statistics (16x16 blocks)
+        h, w = error_map.shape
+        bs = 16
+        block_means = []
+        block_stds = []
+        for y in range(0, h - bs + 1, bs):
+            for x in range(0, w - bs + 1, bs):
+                patch = error_map[y : y + bs, x : x + bs]
+                block_means.append(float(np.mean(patch)))
+                block_stds.append(float(np.std(patch)))
+
+        if not block_means:
+            fallback_metrics = {"error": "Image too small for block analysis"}
+            return ("Low", fallback_metrics) if return_metrics else "Low"
+
+        block_means_arr = np.array(block_means)
+        med_block = float(np.median(block_means_arr))
+        p99_block = float(np.percentile(block_means_arr, 99))
+        max_block = float(np.max(block_means_arr))
+
+        # Outlier block ratio: ratio of peak patch to background median
+        # Baseline floor of 0.6 prevents small denominators from artificially inflating ratios on white document space or solid backgrounds
+        baseline = max(med_block, 0.6)
+        patch_ratio_max = max_block / baseline
+        patch_ratio_p99 = p99_block / baseline
+
+        # Outlier count: patches with error significantly exceeding background
+        # An absolute minimum threshold of 3.8 ensures normal low-error printed text and borders are not counted as outliers
+        outlier_threshold = max(med_block * 3.5, med_block + 3.0 * float(np.std(block_means_arr)), 3.8)
+        outlier_count = int(np.sum(block_means_arr > outlier_threshold))
+        outlier_pct = float(outlier_count / len(block_means_arr) * 100)
+
+        # 3. Spatial Gradient & Boundary Discontinuity Detection
+        gy, gx = np.gradient(error_map)
+        grad_mag = np.sqrt(gx**2 + gy**2)
+        grad_p99 = float(np.percentile(grad_mag, 99))
+        grad_max = float(np.max(grad_mag))
+
+        # 4. Check EXIF software signatures
         has_editing_software = False
+        software_detected = None
         if exif_info and exif_info.get("software"):
-            sw_lower = str(exif_info["software"]).lower()
-            if any(k in sw_lower for k in ["photoshop", "gimp", "canva", "midjourney", "stable diffusion"]):
+            sw = str(exif_info["software"]).lower()
+            known = [
+                "photoshop", "gimp", "canva", "snapseed", "picsart",
+                "fotor", "midjourney", "stable diffusion", "lightroom", "procreate",
+                "dall-e", "comfyui", "automatic1111", "firefly",
+                "android gallery", "gallery", "samsung gallery", "samsung editor",
+                "google photos", "apple photos", "photo editor", "pixlr",
+                "vsco", "facetune", "remini", "meitu", "inshot",
+            ]
+            if any(k in sw for k in known):
                 has_editing_software = True
+                software_detected = exif_info["software"]
 
-        if has_editing_software and (diff_std > 8.0 or diff_99th > 30.0):
-            return "High"
-        if has_editing_software or diff_std > 7.0 or diff_99th > 25.0:
-            return "Medium"
-        if diff_std > 4.0 or diff_99th > 15.0:
-            return "Low"
-        return "Low"
-    except Exception:
-        return "None"
+        # 5. Composite Multi-Factor Tampering Evaluation
+        # Requires substantial absolute error (max_block >= 4.0) so document/text contrast alone is never flagged
+        has_critical_patch = (patch_ratio_max >= 12.0 and max_block >= 4.8 and outlier_count >= 2)
+        has_moderate_patch = (patch_ratio_max >= 7.5 and max_block >= 4.0 and outlier_count >= 1)
+        has_slight_patch = (patch_ratio_max >= 4.0 and max_block >= 3.2 and outlier_count >= 1)
+
+        # Factor B: Sharp boundary transition (edges indicative of splicing/mosaic boundaries)
+        # Spliced boundary is only flagged if accompanied by an anomalous high-error patch
+        has_sharp_boundary = (grad_max >= 12.0 and max_block >= 4.5 and patch_ratio_max >= 6.0 and outlier_count >= 1)
+
+        # Factor C: Global high variance (e.g. full-canvas composites)
+        has_high_global_variance = (global_std > 8.0 or global_p99 > 30.0)
+        has_moderate_global_variance = (global_std > 6.0 or global_p99 > 22.0)
+
+        # Explanatory anomaly rationale
+        explanatory_anomaly: Optional[str] = None
+        if has_critical_patch:
+            explanatory_anomaly = (
+                f"Localized compression anomaly detected: peak patch error is {patch_ratio_max:.1f}x above "
+                f"background baseline ({outlier_pct:.1f}% of blocks show distinct re-compression mismatch)."
+            )
+        elif has_sharp_boundary:
+            explanatory_anomaly = (
+                f"Sharp boundary discontinuities detected in error level analysis (grad: {grad_max:.1f}) "
+                f"indicating spliced borders or localized pixelation."
+            )
+        elif has_moderate_patch:
+            explanatory_anomaly = (
+                f"Moderate localized patch variance detected ({patch_ratio_max:.1f}x baseline error)."
+            )
+        elif has_editing_software:
+            explanatory_anomaly = (
+                f"Editing software signature detected in image metadata ({software_detected})."
+            )
+
+        metrics = {
+            "global_std": round(global_std, 2),
+            "global_p99": round(global_p99, 2),
+            "median_block_error": round(med_block, 2),
+            "max_block_error": round(max_block, 2),
+            "patch_ratio_max": round(patch_ratio_max, 2),
+            "outlier_blocks_count": outlier_count,
+            "outlier_blocks_pct": round(outlier_pct, 2),
+            "grad_max": round(grad_max, 2),
+            "grad_p99": round(grad_p99, 2),
+            "has_editing_software": has_editing_software,
+            "explanatory_anomaly": explanatory_anomaly,
+        }
+
+        # Classification decision hierarchy
+        if has_editing_software and (has_critical_patch or has_high_global_variance or has_sharp_boundary):
+            verdict = "High"
+        elif has_critical_patch and (has_sharp_boundary or patch_ratio_max >= 20.0 or outlier_count >= 3):
+            verdict = "High"
+        elif has_high_global_variance and has_moderate_patch:
+            verdict = "High"
+        elif has_editing_software or has_moderate_patch or has_sharp_boundary or has_moderate_global_variance:
+            verdict = "Medium"
+        elif has_slight_patch or global_std > 3.5 or global_p99 > 12.0:
+            verdict = "Low"
+        else:
+            verdict = "Low"
+
+        return (verdict, metrics) if return_metrics else verdict
+
+    except Exception as e:
+        fallback_metrics = {"error": str(e)}
+        return ("None", fallback_metrics) if return_metrics else "None"
 
 
 def is_safe_url(url: str) -> bool:

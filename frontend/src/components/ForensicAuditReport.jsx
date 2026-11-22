@@ -338,6 +338,38 @@ export default function ForensicAuditReport({ audit, originalImagePreview, onNew
             </div>
           </div>
 
+          {/* Quantitative Localized ELA Metrics */}
+          {audit.visual_forensics.ela_metrics && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+              <div className="bg-background/70 rounded-lg p-2.5 border border-surface-border">
+                <div className="text-[10px] font-mono text-slate-400 uppercase">Peak Patch Error</div>
+                <div className="text-xs font-mono font-bold text-accent mt-0.5">
+                  {audit.visual_forensics.ela_metrics.patch_ratio_max ? `${audit.visual_forensics.ela_metrics.patch_ratio_max}x` : '1.0x'}
+                </div>
+              </div>
+              <div className="bg-background/70 rounded-lg p-2.5 border border-surface-border">
+                <div className="text-[10px] font-mono text-slate-400 uppercase">Boundary Discontinuity</div>
+                <div className="text-xs font-mono font-bold text-slate-200 mt-0.5">
+                  {audit.visual_forensics.ela_metrics.grad_max ?? 'N/A'}
+                </div>
+              </div>
+              <div className="bg-background/70 rounded-lg p-2.5 border border-surface-border">
+                <div className="text-[10px] font-mono text-slate-400 uppercase">Outlier Blocks</div>
+                <div className="text-xs font-mono font-bold text-slate-200 mt-0.5">
+                  {audit.visual_forensics.ela_metrics.outlier_blocks_pct !== undefined
+                    ? `${audit.visual_forensics.ela_metrics.outlier_blocks_pct}%`
+                    : '0%'}
+                </div>
+              </div>
+              <div className="bg-background/70 rounded-lg p-2.5 border border-surface-border">
+                <div className="text-[10px] font-mono text-slate-400 uppercase">Global Deviation</div>
+                <div className="text-xs font-mono font-bold text-slate-200 mt-0.5">
+                  {audit.visual_forensics.ela_metrics.global_std ?? '0.0'}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Anomalies List */}
           {audit.visual_forensics.exif_summary?.anomalies?.length > 0 && (
             <div className="bg-red-500/10 border border-red-500/25 rounded-xl p-4">

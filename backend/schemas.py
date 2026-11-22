@@ -1,4 +1,4 @@
-from typing import List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -41,6 +41,9 @@ class VisualForensics(BaseModel):
     )
     exif_summary: ExifSummary = Field(
         default_factory=ExifSummary, description="Metadata and software forensic findings"
+    )
+    ela_metrics: Optional[Dict[str, Any]] = Field(
+        default=None, description="Detailed quantitative metrics of localized ELA variance and anomaly detection"
     )
 
 

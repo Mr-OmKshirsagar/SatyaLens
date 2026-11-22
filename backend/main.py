@@ -161,7 +161,13 @@ def analyze_claim(
         try:
             ela_heatmap = generate_ela_heatmap(image_bytes)
             exif_dict = extract_exif_metadata(image_bytes)
-            tampering_likelihood = compute_tampering_likelihood(image_bytes, exif_dict)
+            tampering_likelihood, ela_metrics = compute_tampering_likelihood(
+                image_bytes, exif_dict, return_metrics=True
+            )
+
+            # Surface localized ELA anomaly rationale into anomalies list
+            if ela_metrics.get("explanatory_anomaly"):
+                exif_dict.setdefault("anomalies", []).append(ela_metrics["explanatory_anomaly"])
 
             visual_forensics = VisualForensics(
                 has_image=True,
@@ -172,6 +178,7 @@ def analyze_claim(
                     camera_model=exif_dict.get("camera_model"),
                     anomalies=exif_dict.get("anomalies", []),
                 ),
+                ela_metrics=ela_metrics,
             )
         except ValueError as e:
             raise HTTPException(
@@ -194,6 +201,8 @@ def analyze_claim(
         visual_forensics=visual_forensics,
         audio_bytes=audio_bytes,
         audio_mime_type=audio_mime_type,
+        image_bytes=image_bytes,
+        image_mime_type=getattr(image, "content_type", None) or "image/jpeg",
     )
 
     return report
