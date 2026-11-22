@@ -58,6 +58,10 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
     }
     if (typeof window !== 'undefined' && window.location) {
       const { hostname, origin } = window.location
+      // When deployed on Vercel, route directly to the production Render backend
+      if (hostname && hostname.includes('vercel.app')) {
+        return 'https://satyalens-backend.onrender.com'
+      }
       if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
         return (origin || '').replace(/\/+$/, '')
       }
