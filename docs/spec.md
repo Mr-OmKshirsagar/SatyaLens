@@ -12,8 +12,10 @@ Build **SatyaLens**, a full-stack, AI-powered fact-verification and deepfake/med
 - **Frontend (`/frontend`):** React, Vite, Tailwind CSS, `framer-motion`, `lucide-react`, and Magic UI registry components (leveraging Stitch MCP design tokens and Manus React component assembly).
 - **Backend (`/backend`):** Python 3.11+, FastAPI, Uvicorn, Pydantic v2, `python-multipart`, `python-dotenv`, `Pillow`, `NumPy`, and `trafilatura`.
 - **AI & Grounded Search:**
-  - **Primary:** Google GenAI SDK (`gemini-3.8-flash`) with Google Search grounding enabled and structured JSON schema enforcement.
-  - **Fallback:** `ddgs` (keyless web search) paired with Groq (`llama-3.3-70b-versatile`) inside a `try/except` fallback when primary search or generation fails or hits rate limits.
+  - **Tier 1 (Primary):** Google GenAI SDK (`gemini-3.8-flash`, fallback to `gemini-3.1-flash-lite`) with native Google Search grounding enabled (`tools=[types.Tool(google_search=types.GoogleSearch())]`) and structured JSON schema enforcement.
+  - **Tier 2 (Smart Hybrid Gemini):** Real-time web snippets fetched via `ddgs` (`from ddgs import DDGS`) and injected directly into Gemini prompt context when native search grounding hits 429 quota limits.
+  - **Tier 3 (Groq Fallback):** Groq API (`llama-3.3-70b-versatile` / `openai/gpt-oss-120b`) paired with `ddgs` live search snippets when Gemini is unavailable.
+  - **Tier 4 (Deterministic Heuristics):** Pure Python rule-based evaluation and ELA tampering scoring ensuring requests never crash with unhandled `500` errors.
 - **Developer & Verification Tooling:** Antigravity (Gemini 3.8 High), Context7 MCP, Magic UI MCP, Stitch MCP, Figma MCP, Manus MCP, and Chrome DevTools MCP.
 - **Deployment Platforms:** Vercel (Frontend Client) and Render (Backend REST API).
 
@@ -21,12 +23,14 @@ Build **SatyaLens**, a full-stack, AI-powered fact-verification and deepfake/med
 
 ## 3. Core Features
 
-- **Multi-Modal Forensic Intake:** Accepts `text` (WhatsApp forwards or claims), `url` (extracted via `trafilatura`), and `image` (uploaded screenshots, memes, or photos), plus `audio` (P1 stretch only).
-- **Deterministic Image & Metadata Forensics:** Generates a pixel-level Error Level Analysis (ELA) heatmap (re-saved at JPEG quality 90, amplified pixel difference returned as a base64 JPEG data URI) and extracts EXIF/software metadata anomalies.
-- **Atomic Claim Decomposition & Grounded Verification:** Breaks submissions into discrete claims, checks them via live grounded search, and attaches clickable source citations (`title`, `url`).
+- **Multi-Modal Forensic Intake:** Accepts `text` (WhatsApp forwards or claims), `url` (hardened SSRF protection with loopback/private IP filtering and `trafilatura` extraction), `image` (uploaded screenshots, memes, or photos), and `audio` (Step 9 voice note analysis).
+- **Deterministic Image & Metadata Forensics:** Generates a pixel-level Error Level Analysis (ELA) heatmap (re-saved at JPEG quality 90, amplified pixel difference returned as a base64 JPEG data URI), calculates localized patch-level variance and anomalous patch count (`ela_metrics`), and extracts EXIF/software metadata signatures (Photoshop, Snapseed, Android Gallery, Canva, etc.).
+- **Image-First Context Evaluation:** When an image is submitted without claim text, audits the image for text/claims first; if purely non-claim media (photo/landscape), audits tampering likelihood without fabricating unrelated claims.
+- **Audio Voice Note Forensics (Step 9):** Ingests audio files (`.mp3`, `.wav`, `.ogg`, `.m4a`, `.aac`, `.webm`, `.flac`) up to 25MB, transcribes spoken claims, audits for acoustic synthetic speech / voice cloning, and classifies `voice_synthetic_likelihood`.
+- **Atomic Claim Decomposition & Grounded Verification:** Breaks submissions into discrete claims, verifies them via live grounded search with strict qualifier and ordinal scrutiny (e.g., verifying "first" vs. "second", superlatives, dates), and attaches clickable source citations (`title`, `url`).
 - **Linguistic Manipulation & Scam-Hook Detection:** Flags false urgency, fear-mongering, authority spoofing, and phishing/scam triggers.
-- **Counter-Spread WhatsApp Fact Cards:** Generates shareable, copy-ready verification summaries in English (`whatsapp_card_en`) and Hindi (`whatsapp_card_hi`).
-- **Graceful Fallback & Validation:** Returns `400 Bad Request` when no valid input is supplied; routes provider/search failures through `ddgs` + Groq fallback instead of crashing with unhandled `500` errors.
+- **Counter-Spread WhatsApp Fact Cards:** Generates shareable, copy-ready verification summaries in English (`whatsapp_card_en`) and Hindi Devanagari (`whatsapp_card_hi`) with aligned verdicts and score dials.
+- **Graceful Fallback & Validation:** Returns `400 Bad Request` when no valid input is supplied; routes provider/search failures through the 4-tier resilience fallback chain instead of crashing with unhandled `500` errors.
 
 ---
 
@@ -41,12 +45,13 @@ Build **SatyaLens**, a full-stack, AI-powered fact-verification and deepfake/med
 
 - **Header Bar:** SatyaLens branding and live forensic engine status pill (no auth controls).
 - **Forensic Intake Console:**
-  - Input tabs/controls for `Text`, `URL`, and `Image` (plus optional `Audio` in P1).
+  - Input tabs/controls for `Text`, `URL`, `Image`, and `Voice Note`.
   - **3 One-Click Live Sample Triggers** that execute real `POST /api/analyze` requests (never client-side fake data).
   - Multi-stage forensic progress indicator while analysis runs.
 - **4-Layer Forensic Audit Report:**
   - **Score & Verdict Card:** `0–100` authenticity score, verdict badge (`Verified`, `Misleading`, `Fabricated`, `Manipulated Media`, `Unverified`), provenance category, and concise summary.
-  - **Visual Forensics Panel (when `has_image === true`):** Toggle/view between original image and ELA heatmap + EXIF summary details.
+  - **Visual Forensics Panel (when `has_image === true`):** Interactive toggle between original image and ELA heatmap, quantitative metrics, and EXIF summary details.
+  - **Audio Voice Note Panel (when `has_audio === true`):** Audio player, extracted spoken transcript, and synthetic voice likelihood badge.
   - **Atomic Claims Panel:** Claim-by-claim status, explanation, and clickable source links.
   - **Linguistic Flags & WhatsApp Fact Card:** Manipulation badges + English/Hindi toggle with 1-click copy.
 
@@ -54,10 +59,10 @@ Build **SatyaLens**, a full-stack, AI-powered fact-verification and deepfake/med
 
 ## 6. Backend Architecture
 
-- **Entrypoint & Routing (`backend/main.py`):** Exposes `GET /health` and `POST /api/analyze` (`multipart/form-data`), validates non-empty input (`400` otherwise), and configures CORS (`allow_origins=["*"]`).
-- **Schema Layer (`backend/schemas.py`):** Pydantic v2 models enforcing the exact `POST /api/analyze` JSON response contract.
-- **Forensics Service (`backend/forensics.py`):** Pure deterministic Python helpers for ELA heatmap generation, EXIF metadata extraction, and URL text extraction.
-- **Analyzer Service (`backend/analyzer.py`):** Orchestrates primary Gemini + Google Search grounding and `ddgs` + Groq fallback into the unified response contract.
+- **Entrypoint & Routing (`backend/main.py`):** Exposes `GET /health` and `POST /api/analyze` (`multipart/form-data`), validates non-empty input (`400` otherwise), enforces SSRF protection and file size bounds, and configures CORS (`allow_origins=["*"]`).
+- **Schema Layer (`backend/schemas.py`):** Pydantic v2 models enforcing the exact `POST /api/analyze` JSON response contract (`ForensicAuditResponse`).
+- **Forensics Service (`backend/forensics.py`):** Pure deterministic Python helpers for ELA heatmap generation, EXIF metadata extraction, and URL text extraction with SSRF security verification.
+- **Analyzer Service (`backend/analyzer.py`):** Orchestrates the 4-tier resilience fallback chain, candidate search query generation, prompt injection defanging, and post-processing consistency guards.
 
 ---
 
@@ -67,7 +72,7 @@ Build **SatyaLens**, a full-stack, AI-powered fact-verification and deepfake/med
 - `text` (optional `str`)
 - `url` (optional `str`)
 - `image` (optional `UploadFile`)
-- `audio` (optional `UploadFile`, P1 stretch only)
+- `audio` (optional `UploadFile`)
 
 ### `POST /api/analyze` Response (`200 OK`)
 ```json
@@ -92,7 +97,18 @@ Build **SatyaLens**, a full-stack, AI-powered fact-verification and deepfake/med
       "software": null,
       "camera_model": null,
       "anomalies": []
+    },
+    "ela_metrics": {
+      "mean_error": 0.0,
+      "max_patch_variance": 0.0,
+      "anomalous_patches_count": 0
     }
+  },
+  "audio_forensics": {
+    "has_audio": false,
+    "transcript": null,
+    "duration_seconds": null,
+    "voice_synthetic_likelihood": "None"
   },
   "linguistic_flags": [
     { "trigger": "", "evidence": "", "severity": "Low" }

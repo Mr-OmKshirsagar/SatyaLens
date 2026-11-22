@@ -14,16 +14,20 @@
 ---
 
 ## 2. Layout & Core Components
-1. **Top Header:** SatyaLens wordmark + live engine status indicator (zero login/signup buttons).
+1. **Top Header:** SatyaLens wordmark + live forensic engine status pill (zero login/signup buttons).
 2. **Forensic Intake Console:**
-   - Tabs/controls for `Text`, `URL`, and `Image` (plus optional `Audio` in P1).
-   - **3 One-Click Live Sample Triggers** calling the real `POST /api/analyze` endpoint.
-   - Animated multi-stage scan status while awaiting `POST /api/analyze`.
+   - Tabs/controls for `Text`, `URL`, `Image`, and `Voice Note` (with live audio file picker, format validation, and clear status).
+   - **3 One-Click Live Sample Triggers** calling the real `POST /api/analyze` endpoint:
+     - *UNESCO Anthem Viral Forward* (Text claim check)
+     - *Altered Document / Photo* (Visual ELA & EXIF tampering audit)
+     - *Viral Audio Voice Note* (Audio speech transcript & voice clone audit)
+   - Animated multi-stage scan status with progressive forensic checkpoints.
 3. **4-Layer Forensic Audit Output:**
-   - **Verdict & Score Card:** `0–100` score, verdict badge, provenance category, and summary.
-   - **Visual Forensics Card (when `has_image === true`):** Toggle/comparison between original image and ELA heatmap + EXIF summary.
-   - **Atomic Claims & Citations Card:** Claim verification status, explanation, and clickable source URLs.
-   - **Linguistic Flags & WhatsApp Fact Card:** Manipulation badges + English/Hindi toggle with 1-click copy.
+   - **Layer 1: Verdict & Score Card:** `0–100` authenticity score dial, verdict badge (`Verified`, `Misleading`, `Fabricated`, `Manipulated Media`, `Unverified`), provenance category pill, engine used indicator, and concise executive summary.
+   - **Layer 2A: Visual Forensics Card (when `has_image === true`):** Interactive toggle between original image and ELA heatmap, localized patch variance metrics, and EXIF software/camera metadata inspector.
+   - **Layer 2B: Audio Voice Note Card (when `has_audio === true`):** In-browser audio player, extracted spoken transcript, and synthetic voice / AI clone likelihood badge.
+   - **Layer 3: Atomic Claims & Citations Card:** Claim verification status, factual context explanation, and clickable grounded source URLs.
+   - **Layer 4: Linguistic Flags & WhatsApp Fact Card:** Psychological scam triggers (False Urgency, Authority Spoofing, etc.) + English/Hindi Devanagari toggle with 1-click clipboard copy.
 
 ---
 
