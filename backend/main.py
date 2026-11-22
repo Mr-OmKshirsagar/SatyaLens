@@ -125,7 +125,27 @@ def analyze_claim(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Audio file exceeds maximum allowable size of 25MB.",
                 )
-            audio_mime_type = getattr(audio, "content_type", None) or "audio/mp3"
+
+            # Accurately map filename extension & content type to Gemini-supported MIME types
+            fn_lower = audio.filename.lower()
+            if fn_lower.endswith(".wav"):
+                audio_mime_type = "audio/wav"
+            elif fn_lower.endswith(".mp3"):
+                audio_mime_type = "audio/mp3"
+            elif fn_lower.endswith(".ogg") or fn_lower.endswith(".opus"):
+                audio_mime_type = "audio/ogg"
+            elif fn_lower.endswith(".m4a") or fn_lower.endswith(".aac") or fn_lower.endswith(".mp4"):
+                audio_mime_type = "audio/mp4"
+            elif fn_lower.endswith(".webm"):
+                audio_mime_type = "audio/webm"
+            elif fn_lower.endswith(".flac"):
+                audio_mime_type = "audio/flac"
+            else:
+                raw_ct = getattr(audio, "content_type", None)
+                if raw_ct and raw_ct.startswith("audio/"):
+                    audio_mime_type = raw_ct
+                else:
+                    audio_mime_type = "audio/wav"
         except HTTPException:
             raise
         except Exception as e:

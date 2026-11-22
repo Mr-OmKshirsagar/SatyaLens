@@ -118,6 +118,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
     }
     setError(null)
     setAudioFile(file)
+    setAudioQuery('') // Ensure user uploaded file never retains stale sample claim text
     const previewUrl = URL.createObjectURL(file)
     setAudioPreview(previewUrl)
   }
@@ -128,6 +129,7 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
     }
     setAudioFile(null)
     setAudioPreview(null)
+    setAudioQuery('')
     if (audioInputRef.current) audioInputRef.current.value = ''
   }
 
@@ -278,6 +280,10 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
     setError(null)
     if (sampleType === 'viral_text') {
       clearImage()
+      clearAudio()
+      setUrlInput('')
+      setImageQuery('')
+      setAudioQuery('')
       setActiveTab('text')
       const text =
         '🚨 URGENT FORWARD: UNESCO has officially declared the Indian National Anthem as the best in the world! NASA satellite has also confirmed cosmic energy alignment. Forward to 10 groups immediately or bad luck will follow!'
@@ -287,6 +293,10 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
       await executeAnalysis(fd, null)
     } else if (sampleType === 'fact_url') {
       clearImage()
+      clearAudio()
+      setTextInput('')
+      setImageQuery('')
+      setAudioQuery('')
       setActiveTab('url')
       const url = 'https://en.wikipedia.org/wiki/Jana_Gana_Mana'
       setUrlInput(url)
@@ -295,6 +305,9 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
       await executeAnalysis(fd, null)
     } else if (sampleType === 'meme_image') {
       clearAudio()
+      setTextInput('')
+      setUrlInput('')
+      setAudioQuery('')
       setActiveTab('image')
       const file = await createSampleImageFile()
       const previewUrl = URL.createObjectURL(file)
@@ -308,6 +321,9 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
       await executeAnalysis(fd, previewUrl)
     } else if (sampleType === 'viral_audio') {
       clearImage()
+      setTextInput('')
+      setUrlInput('')
+      setImageQuery('')
       setActiveTab('audio')
       const file = createSampleAudioFile()
       const previewUrl = URL.createObjectURL(file)
@@ -507,6 +523,9 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
             onClick={() => {
               setActiveTab('audio')
               setError(null)
+              if (!audioFile || audioFile.name !== 'viral_voice_note_leak.wav') {
+                setAudioQuery('')
+              }
             }}
             disabled={isLoading}
             className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition relative ${

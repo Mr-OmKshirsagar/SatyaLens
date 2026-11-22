@@ -464,7 +464,7 @@ export default function ForensicAuditReport({ audit, originalImagePreview, onNew
               <span>Decoded Spoken Audio Transcript</span>
             </div>
             <div className="p-4 rounded-xl bg-background border border-surface-border text-sm text-slate-200 font-sans leading-relaxed whitespace-pre-wrap">
-              {audit.audio_forensics.transcript || 'Spoken audio payload processed into claim decomposition.'}
+              {audit.audio_forensics.transcript || 'No intelligible spoken speech was transcribed from this audio recording.'}
             </div>
           </div>
 
