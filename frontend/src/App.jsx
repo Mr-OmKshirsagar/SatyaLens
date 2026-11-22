@@ -1,111 +1,144 @@
-import React, { useState, useRef } from 'react'
-import { ShieldCheck, Sparkles } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
-import ForensicIntakeConsole from './components/ForensicIntakeConsole'
-import ForensicAuditReport from './components/ForensicAuditReport'
+import React, { useState, useEffect } from 'react'
+import { ThemeProvider } from './lib/themeContext'
+import { checkHealth } from './lib/api'
+import Sidebar from './components/layout/Sidebar'
+import Navbar from './components/layout/Navbar'
+import Footer from './components/layout/Footer'
+import LandingPage from './components/pages/LandingPage'
+import AnalysisConsolePage from './components/pages/AnalysisConsolePage'
+import FeedbackPage from './components/pages/FeedbackPage'
+import TermsPage from './components/pages/TermsPage'
+import AboutPage from './components/pages/AboutPage'
+import Toast from './components/ui/Toast'
 
 export default function App() {
-  const [currentResult, setCurrentResult] = useState(null)
-  const [originalImagePreview, setOriginalImagePreview] = useState(null)
-  const reportRef = useRef(null)
+  const [activePage, setActivePage] = useState('landing') // 'landing' | 'console' | 'feedback' | 'terms' | 'about'
+  const [initialSampleTrigger, setInitialSampleTrigger] = useState(null)
+  const [toastMessage, setToastMessage] = useState(null)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [backendStatus, setBackendStatus] = useState('checking') // 'checking' | 'connected' | 'disconnected'
 
-  const handleAnalysisComplete = (result, imagePreview) => {
-    setCurrentResult(result)
-    setOriginalImagePreview(imagePreview || null)
-    setTimeout(() => {
-      reportRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }, 150)
+  const refreshBackendHealth = async () => {
+    setBackendStatus('checking')
+    const health = await checkHealth()
+    setBackendStatus(health.ok ? 'connected' : 'disconnected')
   }
 
-  const handleReset = () => {
-    setCurrentResult(null)
-    setOriginalImagePreview(null)
+  useEffect(() => {
+    refreshBackendHealth()
+    const timer = setInterval(async () => {
+      const health = await checkHealth()
+      setBackendStatus(health.ok ? 'connected' : 'disconnected')
+    }, 12000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const handleTriggerDemoFromLanding = (sampleType) => {
+    setInitialSampleTrigger(sampleType)
+    setActivePage('console')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const handleNavigateToConsole = () => {
+    setInitialSampleTrigger(null)
+    setActivePage('console')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleGoHome = () => {
+    setInitialSampleTrigger(null)
+    setActivePage('landing')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const showToast = (message) => {
+    setToastMessage(message)
+    setTimeout(() => {
+      setToastMessage(null)
+    }, 3500)
+  }
+
+  const isLanding = activePage === 'landing'
+
   return (
-    <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans selection:bg-accent/30 selection:text-white">
-      {/* Top Header Bar */}
-      <header className="border-b border-surface-border bg-surface/80 backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center shadow-lg shadow-accent/20 border border-accent/40">
-              <ShieldCheck className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white via-slate-100 to-accent text-transparent bg-clip-text">
-                  SatyaLens
-                </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-accent/10 border border-accent/30 text-accent font-semibold tracking-wide">
-                  CIVIC PULSE MVP
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 hidden sm:block">
-                Real-Time Fact-Verification & Deepfake Audit Engine
-              </p>
-            </div>
-          </div>
+    <ThemeProvider>
+      <div className="min-h-screen font-sans bg-slate-50 text-slate-900 dark:bg-canvas-dark dark:text-slate-100 transition-colors duration-200 selection:bg-brand-primary/25 selection:text-brand-primary">
+        {/* If Landing Page: Fullscreen Layout with Footer */}
+        {isLanding ? (
+          <div className="flex flex-col min-h-screen">
+            <Navbar
+              activePage="landing"
+              isLanding={true}
+              onOpenConsole={handleNavigateToConsole}
+              backendStatus={backendStatus}
+              onRetryHealth={refreshBackendHealth}
+            />
 
-          {/* Engine Status Indicator (Zero-Auth Incognito) */}
-          <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-surface border border-surface-border text-xs font-mono">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-verdict-verified opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-verdict-verified"></span>
-            </span>
-            <span className="text-slate-300">Forensics Core</span>
-            <span className="text-slate-500">|</span>
-            <span className="text-emerald-400 font-semibold">Active</span>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-8 flex flex-col items-center">
-        {/* Hero Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="text-center max-w-2xl mb-8"
-        >
-          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-accent/10 border border-accent/25 text-accent text-xs font-medium mb-3">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>NxtWave Idea Forge Hackathon — Track 1</span>
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-3 text-white">
-            Stop Viral Misinformation at the Source
-          </h1>
-          <p className="text-sm sm:text-base text-slate-400 leading-relaxed">
-            Multi-modal verification combining pixel-level Error Level Analysis (ELA), live Google Search grounding, psychological scam detection, and 1-click WhatsApp Fact Cards.
-          </p>
-        </motion.div>
-
-        {/* Forensic Intake Console (Step 6) */}
-        <ForensicIntakeConsole
-          onAnalysisStart={() => setCurrentResult(null)}
-          onAnalysisComplete={handleAnalysisComplete}
-          onReset={handleReset}
-        />
-
-        {/* 4-Layer Forensic Audit Report (Step 7) */}
-        <div ref={reportRef} className="w-full">
-          <AnimatePresence>
-            {currentResult && (
-              <ForensicAuditReport
-                audit={currentResult}
-                originalImagePreview={originalImagePreview}
-                onNewAnalysis={handleReset}
+            <main className="flex-1 w-full">
+              <LandingPage
+                onNavigateToConsole={handleNavigateToConsole}
+                onTriggerDemo={handleTriggerDemoFromLanding}
               />
-            )}
-          </AnimatePresence>
-        </div>
-      </main>
+            </main>
 
-      {/* Footer */}
-      <footer className="border-t border-surface-border py-4 px-4 text-center text-xs text-slate-500 font-mono mt-12">
-        SatyaLens © 2026 • Real-Time Fact-Verification & Deepfake Audit Engine • Zero-Auth Hackathon Mode
-      </footer>
-    </div>
+            {/* Footer is only rendered on the Home / Landing page */}
+            <Footer setActivePage={setActivePage} />
+          </div>
+        ) : (
+          /* Workspace Pages: Sidebar on Left, Content on Right (No Footer) */
+          <div className="flex min-h-screen">
+            <Sidebar
+              activePage={activePage}
+              setActivePage={(page) => {
+                setInitialSampleTrigger(null)
+                setActivePage(page)
+              }}
+              isOpen={mobileSidebarOpen}
+              onClose={() => setMobileSidebarOpen(false)}
+              onGoHome={handleGoHome}
+            />
+
+            <div className="flex-1 flex flex-col min-w-0">
+              <Navbar
+                activePage={activePage}
+                isLanding={false}
+                onToggleMobileSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+                backendStatus={backendStatus}
+                onRetryHealth={refreshBackendHealth}
+              />
+
+              <main className="flex-1 w-full pb-12">
+                {activePage === 'console' && (
+                  <AnalysisConsolePage
+                    initialSampleTrigger={initialSampleTrigger}
+                    onCopyToast={showToast}
+                    backendStatus={backendStatus}
+                    onRetryHealth={refreshBackendHealth}
+                  />
+                )}
+
+                {activePage === 'feedback' && (
+                  <FeedbackPage onToast={showToast} />
+                )}
+
+                {activePage === 'terms' && (
+                  <TermsPage />
+                )}
+
+                {activePage === 'about' && (
+                  <AboutPage />
+                )}
+              </main>
+            </div>
+          </div>
+        )}
+
+        {/* Global Toast Feedback */}
+        <Toast
+          message={toastMessage}
+          onClose={() => setToastMessage(null)}
+        />
+      </div>
+    </ThemeProvider>
   )
 }
