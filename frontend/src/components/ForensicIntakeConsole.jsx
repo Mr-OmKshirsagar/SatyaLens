@@ -52,17 +52,17 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
   //      window.location.origin (Vite dev proxy) so the phone does not fail to reach port 8000.
   //    - Otherwise default to http://localhost:8000.
   const getApiUrl = () => {
-    const envUrl = import.meta.env.VITE_API_URL
-    if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
-      return envUrl
+    const rawEnv = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
+    if (rawEnv && !rawEnv.includes('localhost') && !rawEnv.includes('127.0.0.1')) {
+      return rawEnv
     }
     if (typeof window !== 'undefined' && window.location) {
       const { hostname, origin } = window.location
       if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
-        return origin
+        return (origin || '').replace(/\/+$/, '')
       }
     }
-    return envUrl || 'http://localhost:8000'
+    return rawEnv || 'http://localhost:8000'
   }
   const apiUrl = getApiUrl()
 
@@ -252,7 +252,8 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
         }
       }
 
-      const response = await fetch(`${apiUrl}/api/analyze`, {
+      const baseApiUrl = (apiUrl || '').replace(/\/+$/, '')
+      const response = await fetch(`${baseApiUrl}/api/analyze`, {
         method: 'POST',
         body: formData,
       })

@@ -55,7 +55,18 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def normalize_path_slashes(request, call_next):
+    """Normalize duplicate or trailing slashes (e.g. //api/analyze -> /api/analyze)."""
+    raw_path = request.scope.get("path", "")
+    if "//" in raw_path:
+        import re
+        request.scope["path"] = re.sub(r"/+", "/", raw_path)
+    return await call_next(request)
+
+
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
+@app.get("//health", response_model=HealthResponse, include_in_schema=False)
 def health_check() -> HealthResponse:
     """Forensic engine health status endpoint."""
     return HealthResponse(status="ok", service="satyalens-forensics")
@@ -66,6 +77,11 @@ def health_check() -> HealthResponse:
     response_model=ForensicAuditResponse,
     tags=["Forensics"],
     summary="Multi-modal forensic analysis endpoint (Text, URL, Image)",
+)
+@app.post(
+    "//api/analyze",
+    response_model=ForensicAuditResponse,
+    include_in_schema=False,
 )
 def analyze_claim(
     text: Optional[str] = Form(None),
