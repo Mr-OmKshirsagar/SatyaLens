@@ -44,7 +44,27 @@ export default function ForensicIntakeConsole({ onAnalysisStart, onAnalysisCompl
 
   const fileInputRef = useRef(null)
   const audioInputRef = useRef(null)
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+  // Dynamically resolve API URL:
+  // 1. If VITE_API_URL is set to an external production URL (e.g. Render/Cloud), use it.
+  // 2. In local/LAN development:
+  //    - If accessed on mobile or over LAN (e.g. http://192.168.0.233:5173), route through
+  //      window.location.origin (Vite dev proxy) so the phone does not fail to reach port 8000.
+  //    - Otherwise default to http://localhost:8000.
+  const getApiUrl = () => {
+    const envUrl = import.meta.env.VITE_API_URL
+    if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+      return envUrl
+    }
+    if (typeof window !== 'undefined' && window.location) {
+      const { hostname, origin } = window.location
+      if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+        return origin
+      }
+    }
+    return envUrl || 'http://localhost:8000'
+  }
+  const apiUrl = getApiUrl()
 
   // Animate loading stages while analysis runs
   useEffect(() => {
